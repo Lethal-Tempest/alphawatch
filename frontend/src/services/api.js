@@ -2,7 +2,8 @@
 // frontend/src/services/api.js
 import axios from 'axios';
 
-const api = axios.create({ baseURL: '/api' });
+const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+const api = axios.create({ baseURL: `${backendUrl}/api` });
 
 // Attach JWT token automatically to every request
 api.interceptors.request.use((config) => {

@@ -16,7 +16,8 @@ export function useSocket() {
 
   useEffect(() => {
     if (!socketInstance) {
-      socketInstance = io('/', {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+      socketInstance = io(backendUrl || '/', {
         transports:    ['websocket'],
         reconnection:  true,
         reconnectionAttempts: Infinity,
