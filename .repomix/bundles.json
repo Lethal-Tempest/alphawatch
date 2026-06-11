@@ -1,0 +1,33 @@
+{
+  "bundles": {
+    "bundle-874": {
+      "name": "bundle",
+      "created": "2026-05-28T08:54:30.963Z",
+      "lastUsed": "2026-06-08T16:37:17.441Z",
+      "tags": [],
+      "files": [
+        ""
+      ],
+      "configPath": "alphawatch/.repomix/config/bundle-repomix.config.json"
+    },
+    "cropwise_bundle-178": {
+      "name": "cropwise_bundle",
+      "created": "2026-06-07T17:25:55.889Z",
+      "lastUsed": "2026-06-07T17:27:00.304Z",
+      "tags": [],
+      "files": [
+        "../cropo"
+      ]
+    },
+    "alphawatch_bundle-838": {
+      "name": "alphawatch_bundle",
+      "created": "2026-06-10T03:34:57.117Z",
+      "lastUsed": "2026-06-10T04:07:08.875Z",
+      "tags": [],
+      "files": [
+        ""
+      ],
+      "configPath": "alphawatch/.repomix/config/alphawatch_bundle-repomix.config.json"
+    }
+  }
+}

@@ -1,0 +1,84 @@
+
+@import "tailwindcss";
+
+* { box-sizing: border-box; }
+
+/* ── CSS Custom Properties — dark mode (default) ─────────────────────────── */
+:root, [data-theme="dark"] {
+  --bg-base:       #020617;   /* slate-950 */
+  --bg-surface:    #0f172a;   /* slate-900 */
+  --bg-elevated:   #1e293b;   /* slate-800 */
+  --bg-highlight:  #334155;   /* slate-700 */
+
+  --border-base:   #1e293b;   /* slate-800 */
+  --border-muted:  #334155;   /* slate-700 */
+
+  --text-primary:  #f1f5f9;   /* slate-100 */
+  --text-secondary:#94a3b8;   /* slate-400 */
+  --text-muted:    #64748b;   /* slate-500 */
+  --text-faint:    #334155;   /* slate-700 */
+
+  --accent:        #6366f1;   /* indigo-500 */
+  --accent-hover:  #818cf8;   /* indigo-400 */
+
+  --bull:          #22c55e;   /* green-500 */
+  --bear:          #ef4444;   /* red-500 */
+
+  /* chart background passed to lightweight-charts */
+  --chart-bg:      #020617;
+  --chart-grid:    #0f172a;
+  --chart-text:    #94a3b8;
+  --chart-border:  #1e293b;
+
+  color-scheme: dark;
+}
+
+/* ── Light mode overrides ──────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-base:       #f8fafc;   /* slate-50 */
+  --bg-surface:    #ffffff;
+  --bg-elevated:   #f1f5f9;   /* slate-100 */
+  --bg-highlight:  #e2e8f0;   /* slate-200 */
+
+  --border-base:   #e2e8f0;   /* slate-200 */
+  --border-muted:  #cbd5e1;   /* slate-300 */
+
+  --text-primary:  #0f172a;   /* slate-900 */
+  --text-secondary:#475569;   /* slate-600 */
+  --text-muted:    #94a3b8;   /* slate-400 */
+  --text-faint:    #cbd5e1;   /* slate-300 */
+
+  --accent:        #4f46e5;   /* indigo-600 */
+  --accent-hover:  #6366f1;   /* indigo-500 */
+
+  --bull:          #16a34a;   /* green-600 */
+  --bear:          #dc2626;   /* red-600 */
+
+  --chart-bg:      #ffffff;
+  --chart-grid:    #f1f5f9;
+  --chart-text:    #475569;
+  --chart-border:  #e2e8f0;
+
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── Themed scrollbar ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--bg-highlight); }
+
+/* ── Utility: apply theme vars to Tailwind arbitrary values ────────────────── */
+.theme-bg       { background-color: var(--bg-base); }
+.theme-surface  { background-color: var(--bg-surface); }
+.theme-elevated { background-color: var(--bg-elevated); }
+.theme-border   { border-color: var(--border-base); }
+.theme-text     { color: var(--text-primary); }
+.theme-muted    { color: var(--text-muted); }
