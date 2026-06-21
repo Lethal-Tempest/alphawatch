@@ -15,9 +15,86 @@
 //    setHistoricalCandles() to provide depth on first chart load.
 // ─────────────────────────────────────────────────────────────────────────────
 
+const fs = require('fs');
+const path = require('path');
+
 // Shape: candleBuffer[key][interval] = [ { timestamp, open, high, low, close, volume }, ... ]
 const candleBuffer  = {};
 const historyLoaded = new Set();
+
+const CACHE_FILE = path.join(__dirname, '../cache/candleBuffer.json');
+
+// Helper to save cache to disk
+function saveCacheToDisk() {
+  try {
+    const dir = path.dirname(CACHE_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const dataToSave = {
+      candleBuffer,
+      historyLoaded: Array.from(historyLoaded)
+    };
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(dataToSave), 'utf8');
+  } catch (err) {
+    console.error('Failed to save candleBuffer cache to disk:', err.message);
+  }
+}
+
+// Helper to load cache from disk
+function loadCacheFromDisk() {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      console.log('💾 Loading candleBuffer cache from disk...');
+      const raw = fs.readFileSync(CACHE_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed.candleBuffer) {
+        Object.assign(candleBuffer, parsed.candleBuffer);
+      }
+      if (Array.isArray(parsed.historyLoaded)) {
+        parsed.historyLoaded.forEach(k => historyLoaded.add(k));
+      }
+      console.log(`💾 Loaded cache for ${historyLoaded.size} historical indicators keys.`);
+    }
+  } catch (err) {
+    console.error('Failed to load candleBuffer cache from disk:', err.message);
+  }
+}
+
+let saveTimeout = null;
+function triggerSave() {
+  if (saveTimeout) return;
+  saveTimeout = setTimeout(() => {
+    saveCacheToDisk();
+    saveTimeout = null;
+  }, 10000); // Save at most once every 10 seconds
+}
+
+// Load cache immediately on boot
+loadCacheFromDisk();
+
+// Save cache on exit / restart signals
+process.once('SIGUSR2', () => {
+  console.log('💾 Saving candleBuffer cache before nodemon restart...');
+  saveCacheToDisk();
+  if (process.platform !== 'win32') {
+    process.kill(process.pid, 'SIGUSR2');
+  } else {
+    process.exit(0);
+  }
+});
+
+process.on('SIGINT', () => {
+  console.log('💾 Saving candleBuffer cache before SIGINT exit...');
+  saveCacheToDisk();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('💾 Saving candleBuffer cache before SIGTERM exit...');
+  saveCacheToDisk();
+  process.exit(0);
+});
 
 const INTERVAL_MS = {
   '1m':  60       * 1000,
@@ -91,6 +168,7 @@ exports.updateCandleBuffer = (key, tick) => {
       if (candles.length > MAX_CANDLES) candles.shift();
     }
   }
+  triggerSave();
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,12 +189,35 @@ exports.getCandles = (key, interval) => {
     .map(({ _prevVolume, ...c }) => c);         // strip internal field
 };
 
-/**
- * Seed historical candles from the AngelOne REST API.
- * Called by marketController.getHistorical() on cache miss.
- * Incoming candles are merged before any live-polled candles.
- * Zero-volume historical candles are dropped on ingestion.
- */
+const activeFetchPromises = new Map();
+
+exports.getOrFetchHistory = async (key, exchange, symbol, interval, fetchFn) => {
+  const mapKey = `${key}:${interval}`;
+  if (historyLoaded.has(mapKey)) {
+    return;
+  }
+  if (activeFetchPromises.has(mapKey)) {
+    await activeFetchPromises.get(mapKey);
+    return;
+  }
+
+  const promise = (async () => {
+    try {
+      const candles = await fetchFn();
+      exports.setHistoricalCandles(key, interval, candles);
+    } finally {
+      activeFetchPromises.delete(mapKey);
+    }
+  })();
+
+  activeFetchPromises.set(mapKey, promise);
+  await promise;
+};
+
+// Seed historical candles from the AngelOne REST API.
+// Called by marketController.getHistorical() on cache miss.
+// Incoming candles are merged before any live-polled candles.
+// Zero-volume historical candles are dropped on ingestion.
 exports.setHistoricalCandles = (key, interval, candles) => {
   if (!candleBuffer[key]) candleBuffer[key] = {};
 
@@ -134,6 +235,7 @@ exports.setHistoricalCandles = (key, interval, candles) => {
   ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
   candleBuffer[key][interval] = merged.slice(-MAX_CANDLES);
+  triggerSave();
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

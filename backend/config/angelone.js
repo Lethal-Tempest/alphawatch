@@ -34,13 +34,13 @@ const ANGEL_ONE = {
   // MODIFIED: Lifted day values so that at least 400-500 baseline candles 
   // are loaded dynamically into memory buffers before trimming down viewable rows.
   LOOKBACK_DAYS: {
-    '1m':  100,    
-    '5m':  200,   
-    '10m': 500,   
-    '15m': 900,   
-    '30m': 1200,   
-    '1h':  2400,   
-    '1d':  5500,  
+    '1m':  25,    
+    '5m':  50,   
+    '10m': 100,   
+    '15m': 150,   
+    '30m': 300,   
+    '1h':  600,   
+    '1d':  1500,  
   },
 
   // ── Quote mode: FULL gives us OHLCV + depth ────────────────────────────────

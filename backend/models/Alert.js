@@ -15,7 +15,7 @@ const alertConditionSchema = new mongoose.Schema({
   },
   operator: {
     type: String,
-    enum: ['>', '>=', '==', '<=', '<', '!='],
+    enum: ['>', '>=', '==', '<=', '<', '!=', 'crossover', 'crossunder'],
     required: true,
   },
   rightType: {

@@ -16,12 +16,28 @@ exports.init = (io) => {
 };
 
 /**
+ * Fetch all active alerts populated with user and watchlist details once.
+ */
+exports.getActiveAlerts = async () => {
+  try {
+    return await Alert.find({ status: 'active' })
+      .populate('userId')
+      .populate('watchlistId');
+  } catch (err) {
+    console.error('[AlertEngine] getActiveAlerts error:', err.message);
+    return [];
+  }
+};
+
+/**
  * Return all stock keys currently targeted by active alerts.
  * Polling loop uses this to keep active background polling alive.
  */
-exports.getActiveAlertKeys = async () => {
+exports.getActiveAlertKeys = async (activeAlerts) => {
   try {
-    const activeAlerts = await Alert.find({ status: 'active' }).populate('watchlistId');
+    if (!activeAlerts) {
+      activeAlerts = await exports.getActiveAlerts();
+    }
     const keys = new Set();
     for (const alert of activeAlerts) {
       if (alert.targetType === 'specific_stocks' && alert.stocks) {
@@ -45,15 +61,15 @@ exports.getActiveAlertKeys = async () => {
  * Helper: evaluates a single operator condition against indicator values.
  */
 function evaluateCondition(cond, indicators) {
-  if (!indicators) return false;
-  const leftVal = indicators[cond.leftIndicator];
+  if (!indicators || !indicators.latest) return false;
+  const leftVal = indicators.latest[cond.leftIndicator];
   if (leftVal == null) return false;
 
   let rightVal;
   if (cond.rightType === 'value') {
     rightVal = cond.rightValue;
   } else if (cond.rightType === 'indicator') {
-    rightVal = indicators[cond.rightIndicator];
+    rightVal = indicators.latest[cond.rightIndicator];
   }
   if (rightVal == null) return false;
 
@@ -64,6 +80,30 @@ function evaluateCondition(cond, indicators) {
     case '<=': return leftVal <= rightVal;
     case '<':  return leftVal < rightVal;
     case '!=': return leftVal !== rightVal;
+    case 'crossover': {
+      const prevLeftVal = indicators.prev ? indicators.prev[cond.leftIndicator] : null;
+      if (prevLeftVal == null) return false;
+      let prevRightVal;
+      if (cond.rightType === 'value') {
+        prevRightVal = cond.rightValue;
+      } else if (cond.rightType === 'indicator' && indicators.prev) {
+        prevRightVal = indicators.prev[cond.rightIndicator];
+      }
+      if (prevRightVal == null) return false;
+      return leftVal >= rightVal && prevLeftVal < prevRightVal;
+    }
+    case 'crossunder': {
+      const prevLeftVal = indicators.prev ? indicators.prev[cond.leftIndicator] : null;
+      if (prevLeftVal == null) return false;
+      let prevRightVal;
+      if (cond.rightType === 'value') {
+        prevRightVal = cond.rightValue;
+      } else if (cond.rightType === 'indicator' && indicators.prev) {
+        prevRightVal = indicators.prev[cond.rightIndicator];
+      }
+      if (prevRightVal == null) return false;
+      return leftVal <= rightVal && prevLeftVal > prevRightVal;
+    }
     default:   return false;
   }
 }
@@ -71,139 +111,149 @@ function evaluateCondition(cond, indicators) {
 /**
  * Evaluate all active alerts targeting the ticked stock key.
  */
-exports.evaluate = async (key, tick) => {
+exports.evaluateAll = async (activeAlerts, liveMarketState) => {
   try {
-    const [exchange, symbol] = key.split(':');
+    if (!activeAlerts || !activeAlerts.length) return;
 
-    // Fetch active alerts populated with user (for email) and watchlist details
-    const activeAlerts = await Alert.find({ status: 'active' })
-      .populate('userId')
-      .populate('watchlistId');
-
-    if (!activeAlerts.length) return;
-
-    // Filter alerts that target this specific stock
-    const matchingAlerts = activeAlerts.filter(alert => {
-      if (alert.targetType === 'specific_stocks') {
-        return alert.stocks.some(
-          s => s.symbol.toUpperCase() === symbol.toUpperCase() && s.exchange.toUpperCase() === exchange.toUpperCase()
-        );
-      } else if (alert.targetType === 'watchlist' && alert.watchlistId) {
-        return alert.watchlistId.stocks.some(
-          s => s.symbol.toUpperCase() === symbol.toUpperCase() && s.exchange.toUpperCase() === exchange.toUpperCase()
-        );
-      }
-      return false;
-    });
-
-    if (!matchingAlerts.length) return;
-
-    // Lazy-load historical candles for any timeframe used in the active alert conditions of this stock if not loaded
-    const timeframesToLoad = new Set();
-    for (const alert of matchingAlerts) {
-      for (const cond of alert.conditions) {
-        if (!candleAggregator.hasHistory(key, cond.timeframe)) {
-          timeframesToLoad.add(cond.timeframe);
-        }
-      }
-    }
-
-    if (timeframesToLoad.size > 0) {
-      const angelOne = require('./angelOneService');
-      for (const tf of timeframesToLoad) {
-        try {
-          console.log(`[AlertEngine] Lazy-loading baseline historical candles for ${key} (${tf})...`);
-          const parsedCandles = await angelOne.fetchHistoricalCandles(exchange, symbol, tf);
-          candleAggregator.setHistoricalCandles(key, tf, parsedCandles);
-          console.log(`[AlertEngine] Loaded ${parsedCandles.length} historical candles for ${key} (${tf})`);
-        } catch (err) {
-          console.error(`[AlertEngine] Failed to lazy-load historical candles for ${key} (${tf}):`, err.message);
-        }
-      }
-    }
-
-    // Lazy cache of indicator sets keyed by timeframe
-    const indicatorsCache = {};
-
-    const getIndicatorsForTimeframe = (tf) => {
-      if (indicatorsCache[tf] !== undefined) {
-        return indicatorsCache[tf];
-      }
-
-      const candles = candleAggregator.getCandles(key, tf);
-      if (candles.length < 2) {
-        indicatorsCache[tf] = null;
-        return null;
-      }
-
-      const computed = indicatorService.computeAllIndicators(candles);
-      const latest = {};
-
-      for (const [indKey, arr] of Object.entries(computed)) {
-        if (arr && arr.length > 0) {
-          latest[indKey] = arr[arr.length - 1];
-        } else {
-          latest[indKey] = null;
-        }
-      }
-
-      // Append core metrics
-      const lastCandle = candles[candles.length - 1];
-      latest.open = +lastCandle.open;
-      latest.high = +lastCandle.high;
-      latest.low = +lastCandle.low;
-      latest.close = +lastCandle.close;
-      latest.volume = +lastCandle.volume;
-      latest.ltp = tick.ltp;
-
-      indicatorsCache[tf] = latest;
-      return latest;
-    };
-
-    for (const alert of matchingAlerts) {
-      // Cooldown check: 1 minute (60,000 ms) cooldown per stock for repeating alerts
+    for (const alert of activeAlerts) {
+      // 1. Cooldown check: 1 minute cooldown per alert
       if (alert.isRepeating && alert.lastTriggeredAt) {
         if (Date.now() - new Date(alert.lastTriggeredAt).getTime() < 60000) {
           continue;
         }
       }
 
-      // Check all conditions (logical AND)
-      let allPassed = true;
-      const conditionSnapshot = [];
-
-      for (const cond of alert.conditions) {
-        const indicators = getIndicatorsForTimeframe(cond.timeframe);
-        const passed = evaluateCondition(cond, indicators);
-
-        if (!passed) {
-          allPassed = false;
-          break;
+      // 2. Identify the target stock keys for this alert
+      const targetStocks = [];
+      if (alert.targetType === 'specific_stocks' && alert.stocks) {
+        for (const stock of alert.stocks) {
+          targetStocks.push({ symbol: stock.symbol.toUpperCase(), exchange: stock.exchange.toUpperCase() });
         }
-
-        // Store condition parameters with triggered values for notification
-        const leftVal = indicators ? indicators[cond.leftIndicator] : null;
-        let rightVal = null;
-        if (cond.rightType === 'value') {
-          rightVal = cond.rightValue;
-        } else if (cond.rightType === 'indicator' && indicators) {
-          rightVal = indicators[cond.rightIndicator];
+      } else if (alert.targetType === 'watchlist' && alert.watchlistId && alert.watchlistId.stocks) {
+        for (const stock of alert.watchlistId.stocks) {
+          targetStocks.push({ symbol: stock.symbol.toUpperCase(), exchange: stock.exchange.toUpperCase() });
         }
-
-        conditionSnapshot.push({
-          timeframe: cond.timeframe,
-          leftIndicator: cond.leftIndicator,
-          operator: cond.operator,
-          rightType: cond.rightType,
-          rightValue: cond.rightValue,
-          rightIndicator: cond.rightIndicator,
-          leftActual: leftVal,
-          rightActual: rightVal
-        });
       }
 
-      if (allPassed) {
-        // Trigger alert!
+      if (targetStocks.length === 0) continue;
+
+      // 3. Evaluate conditions for each target stock that has a current tick
+      const triggeredStocks = [];
+
+      for (const stock of targetStocks) {
+        const key = `${stock.exchange}:${stock.symbol}`;
+        const tick = liveMarketState[key];
+        if (!tick) continue;
+
+        // Check if indicator baseline history needs lazy loading
+        const timeframesToLoad = [];
+        for (const cond of alert.conditions) {
+          if (!candleAggregator.hasHistory(key, cond.timeframe)) {
+            timeframesToLoad.push(cond.timeframe);
+          }
+        }
+
+        if (timeframesToLoad.length > 0) {
+          const angelOne = require('./angelOneService');
+          for (const tf of timeframesToLoad) {
+            try {
+              console.log(`[AlertEngine] Lazy-loading baseline historical candles for ${key} (${tf})...`);
+              await candleAggregator.getOrFetchHistory(key, stock.exchange, stock.symbol, tf, () =>
+                angelOne.fetchHistoricalCandles(stock.exchange, stock.symbol, tf)
+              );
+              console.log(`[AlertEngine] Loaded historical candles for ${key} (${tf})`);
+            } catch (err) {
+              console.error(`[AlertEngine] Failed to lazy-load historical candles for ${key} (${tf}):`, err.message);
+            }
+          }
+        }
+
+        // Cache indicators for this stock & timeframe
+        const indicatorsCache = {};
+        const getIndicatorsForTimeframe = (tf) => {
+          if (indicatorsCache[tf] !== undefined) return indicatorsCache[tf];
+          const candles = candleAggregator.getCandles(key, tf);
+          if (candles.length < 2) {
+            indicatorsCache[tf] = null;
+            return null;
+          }
+          const computed = indicatorService.computeAllIndicators(candles);
+          const latest = {};
+          const prev = {};
+          for (const [indKey, arr] of Object.entries(computed)) {
+            if (arr && arr.length > 0) {
+              latest[indKey] = arr[arr.length - 1];
+              prev[indKey] = arr.length > 1 ? arr[arr.length - 2] : null;
+            } else {
+              latest[indKey] = null;
+              prev[indKey] = null;
+            }
+          }
+          const lastCandle = candles[candles.length - 1];
+          latest.open = +lastCandle.open;
+          latest.high = +lastCandle.high;
+          latest.low = +lastCandle.low;
+          latest.close = +lastCandle.close;
+          latest.volume = +lastCandle.volume;
+          latest.ltp = tick.ltp;
+
+          const prevCandle = candles[candles.length - 2];
+          prev.open = +prevCandle.open;
+          prev.high = +prevCandle.high;
+          prev.low = +prevCandle.low;
+          prev.close = +prevCandle.close;
+          prev.volume = +prevCandle.volume;
+          prev.ltp = +prevCandle.close;
+
+          indicatorsCache[tf] = { latest, prev };
+          return indicatorsCache[tf];
+        };
+
+        // Evaluate all conditions (logical AND)
+        let allPassed = true;
+        const conditionSnapshot = [];
+
+        for (const cond of alert.conditions) {
+          const indicators = getIndicatorsForTimeframe(cond.timeframe);
+          const passed = evaluateCondition(cond, indicators);
+
+          if (!passed) {
+            allPassed = false;
+            break;
+          }
+
+          const leftVal = (indicators && indicators.latest) ? indicators.latest[cond.leftIndicator] : null;
+          let rightVal = null;
+          if (cond.rightType === 'value') {
+            rightVal = cond.rightValue;
+          } else if (cond.rightType === 'indicator' && indicators && indicators.latest) {
+            rightVal = indicators.latest[cond.rightIndicator];
+          }
+
+          conditionSnapshot.push({
+            timeframe: cond.timeframe,
+            leftIndicator: cond.leftIndicator,
+            operator: cond.operator,
+            rightType: cond.rightType,
+            rightValue: cond.rightValue,
+            rightIndicator: cond.rightIndicator,
+            leftActual: leftVal,
+            rightActual: rightVal
+          });
+        }
+
+        if (allPassed) {
+          triggeredStocks.push({
+            symbol: stock.symbol,
+            exchange: stock.exchange,
+            ltp: tick.ltp,
+            conditions: conditionSnapshot
+          });
+        }
+      }
+
+      // 4. Trigger the alert if one or more stocks met criteria
+      if (triggeredStocks.length > 0) {
         const newStatus = alert.isRepeating ? 'active' : 'triggered';
         await Alert.findByIdAndUpdate(alert._id, {
           status: newStatus,
@@ -211,34 +261,38 @@ exports.evaluate = async (key, tick) => {
           lastTriggeredAt: new Date(),
         });
 
-        // 1. Emit Socket.io event for browser toast notification and sound
+        // Send Socket.io event for each triggered stock (so client gets individual toasts/sound)
         if (ioInstance && alert.userId) {
-          ioInstance.to(`user:${alert.userId._id.toString()}`).emit('alert_triggered', {
-            alertId: alert._id,
-            alertName: alert.name,
-            symbol,
-            exchange,
-            ltp: tick.ltp,
-            conditions: conditionSnapshot,
-            note: alert.note || '',
-            triggeredAt: new Date().toISOString(),
-          });
+          for (const stock of triggeredStocks) {
+            ioInstance.to(`user:${alert.userId._id.toString()}`).emit('alert_triggered', {
+              alertId: alert._id,
+              alertName: alert.name,
+              symbol: stock.symbol,
+              exchange: stock.exchange,
+              ltp: stock.ltp,
+              conditions: stock.conditions,
+              note: alert.note || '',
+              triggeredAt: new Date().toISOString(),
+            });
+            console.log(`🔔 Socket Notification Sent: "${alert.name}" on ${stock.exchange}:${stock.symbol} | LTP: ₹${stock.ltp}`);
+          }
         }
 
-        // 2. Send email notification via emailService
+        // Send a single combined email alert for all matched stocks!
         if (alert.userId?.email) {
-          emailService.sendAlertEmail(alert.userId.email, {
+          emailService.sendCombinedAlertEmail(alert.userId.email, {
             _id: alert._id,
             name: alert.name,
             targetType: alert.targetType,
-            conditions: conditionSnapshot
-          }, symbol, exchange, tick.ltp);
+          }, triggeredStocks);
         }
 
-        console.log(`🔔 Alert Triggered: "${alert.name}" on ${exchange}:${symbol} | LTP: ₹${tick.ltp}`);
+        console.log(`🔔 Alert Triggered: "${alert.name}" on [${triggeredStocks.map(s => `${s.exchange}:${s.symbol}`).join(', ')}]`);
       }
     }
   } catch (err) {
-    console.error(`[AlertEngine] Evaluation failed for ${key}:`, err.message);
+    console.error(`[AlertEngine] evaluateAll failed:`, err.message);
   }
 };
+
+exports.evaluateCondition = evaluateCondition;

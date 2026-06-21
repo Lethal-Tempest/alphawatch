@@ -40,7 +40,7 @@ const INDICATORS = [
 ];
 
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
-const OPERATORS = ['>', '>=', '==', '<=', '<', '!='];
+const OPERATORS = ['>', '>=', '==', '<=', '<', '!=', 'crossover', 'crossunder'];
 
 export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
   const [name, setName] = useState(editingAlert?.name || '');
@@ -60,6 +60,16 @@ export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef(null);
+
+  const fetchWatchlists = async () => {
+    try {
+      const { data } = await api.get('/watchlists');
+      setWatchlists(data.watchlists || []);
+      if (data.watchlists?.length > 0 && !watchlistId) {
+        setWatchlistId(data.watchlists[0]._id);
+      }
+    } catch {}
+  };
 
   useEffect(() => {
     fetchWatchlists();
@@ -90,16 +100,6 @@ export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
-
-  const fetchWatchlists = async () => {
-    try {
-      const { data } = await api.get('/watchlists');
-      setWatchlists(data.watchlists || []);
-      if (data.watchlists?.length > 0 && !watchlistId) {
-        setWatchlistId(data.watchlists[0]._id);
-      }
-    } catch {}
-  };
 
   const handleAddStock = (symbol, exchange) => {
     if (stocks.some(s => s.symbol === symbol && s.exchange === exchange)) return;
@@ -331,7 +331,7 @@ export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
                   </div>
 
                   {/* Operator */}
-                  <div className="w-[60px]">
+                  <div className="w-[110px]">
                     <select
                       value={cond.operator}
                       onChange={e => handleConditionChange(idx, 'operator', e.target.value)}

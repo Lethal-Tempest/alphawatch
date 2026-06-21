@@ -3,7 +3,7 @@ import { Bell, Plus, Trash2, X, Edit2 } from 'lucide-react';
 import api from '../../services/api';
 import AlertModal from './AlertModal';
 
-export default function AlertsPanel({ symbol, exchange, socket }) {
+export default function AlertsPanel({ symbol, exchange, socket, onClearFilter }) {
   const [alerts, setAlerts] = useState([]);
   const [toasts, setToasts] = useState([]);
   const [showModal, setShowModal] = useState(false);
@@ -95,6 +95,15 @@ export default function AlertsPanel({ symbol, exchange, socket }) {
 
   const dismissToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
 
+  const filteredAlerts = symbol
+    ? alerts.filter(a => {
+        if (a.targetType === 'watchlist') {
+          return a.watchlistId?.stocks?.some(s => s.symbol.toUpperCase() === symbol.toUpperCase());
+        }
+        return a.stocks?.some(s => s.symbol.toUpperCase() === symbol.toUpperCase());
+      })
+    : alerts;
+
   return (
     <div className="flex flex-col gap-3">
       {/* Toast notifications */}
@@ -125,6 +134,16 @@ export default function AlertsPanel({ symbol, exchange, socket }) {
         ))}
       </div>
 
+      {/* Filter indicator */}
+      {symbol && (
+        <div className="flex items-center justify-between bg-indigo-950/20 border border-indigo-800/30 rounded-xl px-3 py-2 text-[10px] text-indigo-300">
+          <span>Showing alerts for <strong>{symbol}</strong></span>
+          <button onClick={onClearFilter} className="font-extrabold uppercase hover:text-indigo-100 cursor-pointer">
+            Show All
+          </button>
+        </div>
+      )}
+
       {/* Set alert button */}
       <button onClick={handleCreate}
         className="flex items-center justify-center gap-2 px-3 py-2 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 rounded-xl text-xs font-bold hover:bg-indigo-600/20 cursor-pointer transition-colors w-full">
@@ -133,10 +152,10 @@ export default function AlertsPanel({ symbol, exchange, socket }) {
 
       {/* Alerts list */}
       <div className="flex flex-col gap-1.5 max-h-[70vh] overflow-y-auto pr-1">
-        {alerts.length === 0 && (
+        {filteredAlerts.length === 0 && (
           <p className="text-[11px] text-center py-4" style={{ color: 'var(--text-faint)' }}>No alerts set.</p>
         )}
-        {alerts.map(a => {
+        {filteredAlerts.map(a => {
           const isTriggered = a.status === 'triggered';
           const isDismissed = a.status === 'dismissed';
 
@@ -198,6 +217,7 @@ export default function AlertsPanel({ symbol, exchange, socket }) {
       {showModal && (
         <AlertModal
           alert={editingAlert}
+          defaultStock={symbol && exchange ? { symbol, exchange } : null}
           onClose={() => { setShowModal(false); setEditingAlert(null); }}
           onSave={handleSaveSuccess}
         />

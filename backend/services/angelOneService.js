@@ -15,6 +15,8 @@ const ANGEL   = require('../config/angelone');
 
 // ── Module-level session cache ────────────────────────────────────────────────
 let angelScripMaster  = [];
+const nseScripMap = new Map();
+const bseScripMap = new Map();
 let angelSessionToken = null;
 let angelSessionExpiry = 0;
 
@@ -90,7 +92,23 @@ exports.syncScripMaster = async () => {
     (item.exch_seg === 'BSE' && (item.instrumenttype === 'AMXEQ' || item.instrumenttype === ''))
   );
 
-  console.log(`✅ Cached ${angelScripMaster.length} equity tokens.`);
+  // Clear and populate quick-lookup maps
+  nseScripMap.clear();
+  bseScripMap.clear();
+  for (const item of angelScripMaster) {
+    const symbolKey = item.symbol.toUpperCase();
+    if (item.exch_seg === 'NSE') {
+      const cleanSymbol = symbolKey.replace('-EQ', '');
+      nseScripMap.set(cleanSymbol, item);
+    } else if (item.exch_seg === 'BSE') {
+      bseScripMap.set(symbolKey, item);
+      if (item.name) {
+        bseScripMap.set(item.name.toUpperCase(), item);
+      }
+    }
+  }
+
+  console.log(`✅ Cached ${angelScripMaster.length} equity tokens. Maps populated.`);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,26 +117,97 @@ exports.syncScripMaster = async () => {
 exports.resolveToken = (exchange, symbol) => {
   const upper = symbol.toUpperCase();
   if (exchange.toUpperCase() === 'NSE') {
-    return angelScripMaster.find(
-      i => i.exch_seg === 'NSE' && i.symbol === `${upper}-EQ`
-    );
+    return nseScripMap.get(upper);
   }
-  return angelScripMaster.find(
-    i => i.exch_seg === 'BSE' && (i.symbol === upper || i.name === upper)
-  );
+  return bseScripMap.get(upper);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Quote Fetcher — BUG FIX: was `this.getAngelOneSession()` (wrong context)
-//                           now  `self.getAngelOneSession()`  (correct)
-// ─────────────────────────────────────────────────────────────────────────────
-exports.fetchQuote = async (exchange, token) => {
-  // FIX: use `self` alias, not `this`
-  const jwt  = await self.getAngelOneSession();
-  const body = { mode: ANGEL.QUOTE_MODE, exchangeTokens: { [exchange.toUpperCase()]: [String(token)] } };
+// ── REST API Rate Limit Queue ────────────────────────────────────────────────
+const requestQueue = [];
+let queueProcessing = false;
 
-  const res = await axios.post(ANGEL.QUOTE_URL, body, { headers: buildAuthHeaders(jwt) });
-  return res.data?.data?.fetched?.[0] || null;
+async function processQueue() {
+  if (queueProcessing) return;
+  queueProcessing = true;
+  while (requestQueue.length > 0) {
+    const { fn, resolve, reject } = requestQueue.shift();
+    try {
+      console.log(`[Queue] Processing request. Remaining in queue: ${requestQueue.length}`);
+      const res = await fn();
+      resolve(res);
+    } catch (err) {
+      reject(err);
+    }
+    // Wait 1050ms to respect the 1 request/second rate limit
+    await new Promise(r => setTimeout(r, 1050));
+  }
+  queueProcessing = false;
+}
+
+function enqueueRequest(fn, priority = 'low') {
+  return new Promise((resolve, reject) => {
+    if (priority === 'high') {
+      requestQueue.unshift({ fn, resolve, reject });
+      console.log(`[Queue] High-priority request unshifted. Size: ${requestQueue.length}`);
+    } else {
+      requestQueue.push({ fn, resolve, reject });
+      console.log(`[Queue] Low-priority request pushed. Size: ${requestQueue.length}`);
+    }
+    processQueue();
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quote Fetcher
+// ─────────────────────────────────────────────────────────────────────────────
+exports.fetchQuote = async (exchange, token, priority = 'low') => {
+  return enqueueRequest(async () => {
+    const jwt  = await self.getAngelOneSession();
+    const body = { mode: ANGEL.QUOTE_MODE, exchangeTokens: { [exchange.toUpperCase()]: [String(token)] } };
+
+    const res = await axios.post(ANGEL.QUOTE_URL, body, { headers: buildAuthHeaders(jwt) });
+    return res.data?.data?.fetched?.[0] || null;
+  }, priority);
+};
+
+// ── Batch Quote Fetcher ──────────────────────────────────────────────────────
+exports.fetchQuotesBatch = async (items, priority = 'low') => {
+  if (!items || items.length === 0) return [];
+
+  // Split items into chunks of 40 (safe limit below the API's maximum of 50)
+  const chunkSize = 40;
+  const chunks = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+
+  const results = [];
+  for (const chunk of chunks) {
+    const fetched = await enqueueRequest(async () => {
+      const jwt = await self.getAngelOneSession();
+      const exchangeTokens = {};
+      for (const item of chunk) {
+        const ex = item.exchange.toUpperCase();
+        if (!exchangeTokens[ex]) exchangeTokens[ex] = [];
+        exchangeTokens[ex].push(String(item.token));
+      }
+      console.log('📦 Batch Quote Chunk Request:', JSON.stringify(exchangeTokens));
+      const body = { mode: ANGEL.QUOTE_MODE, exchangeTokens };
+      try {
+        const res = await axios.post(ANGEL.QUOTE_URL, body, { headers: buildAuthHeaders(jwt) });
+        return res.data?.data?.fetched || [];
+      } catch (err) {
+        if (err.response) {
+          console.error('❌ Quote API Error Response:', JSON.stringify(err.response.data));
+        }
+        throw err;
+      }
+    }, priority);
+    if (Array.isArray(fetched)) {
+      results.push(...fetched);
+    }
+  }
+  return results;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +224,7 @@ exports.searchScrips = (term) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Historical Candle Fetcher & Downsampler
 // ─────────────────────────────────────────────────────────────────────────────
-exports.fetchHistoricalCandles = async (exchange, symbol, interval) => {
+exports.fetchHistoricalCandles = async (exchange, symbol, interval, priority = 'low') => {
   const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
 
   // Map frontend intervals to API constraints
@@ -165,16 +254,19 @@ exports.fetchHistoricalCandles = async (exchange, symbol, interval) => {
   const toDateStr = `${todayDate.getFullYear()}-${pad(todayDate.getMonth() + 1)}-${pad(todayDate.getDate())} 15:30`;
 
   const jwtToken = await self.getAngelOneSession();
-  const response = await axios.post(
-    ANGEL.HISTORICAL_URL,
-    {
-      exchange: exchange.toUpperCase(),
-      symboltoken: scripMatch.token,
-      interval: apiInterval,
-      fromdate: fromDateStr,
-      todate: toDateStr,
-    },
-    { headers: buildAuthHeaders(jwtToken) }
+  const response = await enqueueRequest(() =>
+    axios.post(
+      ANGEL.HISTORICAL_URL,
+      {
+        exchange: exchange.toUpperCase(),
+        symboltoken: scripMatch.token,
+        interval: apiInterval,
+        fromdate: fromDateStr,
+        todate: toDateStr,
+      },
+      { headers: buildAuthHeaders(jwtToken) }
+    ),
+    priority
   );
 
   if (!response.data?.status || !Array.isArray(response.data.data)) {

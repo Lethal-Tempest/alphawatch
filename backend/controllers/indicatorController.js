@@ -26,7 +26,7 @@ exports.getIndicators = async (req, res, next) => {
     if (candles.length < 30) {
       // Piggy-back on the existing historical fetch pipeline via internal call
       // We call the same internal function that marketController.getHistorical uses
-      const fakeReq = { params: { exchange, symbol, interval } };
+      const fakeReq = { params: { exchange, symbol, interval }, priority: 'low' };
       let resolved = false;
       const fakeRes = {
         statusCode: 200,

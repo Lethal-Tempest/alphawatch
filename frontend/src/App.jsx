@@ -1,4 +1,3 @@
-
 // ─────────────────────────────────────────────────────────────────────────────
 // frontend/src/App.jsx — AlphaWatch Dashboard
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10,10 +9,11 @@ import SearchBar       from './components/search/SearchBar';
 import AuthModal       from './components/auth/AuthModal';
 import LiveTickerBar   from './components/ticker/Livetickerbar';
 import StockDataTable  from './components/datatable/Stockdatatable';
+import WatchlistDashboard from './components/watchlist/WatchlistDashboard';
 import { useSocket }   from './services/useSocket';
 import { useTheme }    from './contexts/ThemeContext';
 import api             from './services/api';
-import { LogOut, BarChart2, Plus, Minus, Table2, ChevronDown, Sun, Moon } from 'lucide-react';
+import { LogOut, BarChart2, Plus, Minus, Table2, ChevronDown, Sun, Moon, Bell, X, Trash2 } from 'lucide-react';
 
 // ── Indicator definitions ─────────────────────────────────────────────────────
 const INDICATOR_GROUPS = [
@@ -146,6 +146,11 @@ export default function App() {
   const [activeView, setActiveView]       = useState(null);
   const [watchlists, setWatchlists]       = useState([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState('');
+  const [newWatchlistName, setNewWatchlistName] = useState('');
+
+  // Alerts sidebar state
+  const [showAlertsSidebar, setShowAlertsSidebar] = useState(false);
+  const [activeAlertStock, setActiveAlertStock]   = useState(null);
 
   // ── Persisted state — survive reloads ──────────────────────────────────────
   const [activeIndicators, setActiveIndicators] = useState(() => {
@@ -159,6 +164,10 @@ export default function App() {
   );
 
   // Persist indicator choices
+  const currentWatchlist = useMemo(() => {
+    return watchlists.find(w => w._id === selectedWatchlistId);
+  }, [watchlists, selectedWatchlistId]);
+
   useEffect(() => {
     localStorage.setItem('aw_indicators', JSON.stringify(activeIndicators));
   }, [activeIndicators]);
@@ -213,6 +222,9 @@ export default function App() {
 
   const handleOpenChart = useCallback((symbol, exchange) => {
     if (activeView?.symbol !== symbol || activeView?.exchange !== exchange) {
+      if (socket && activeView) {
+        socket.emit('unsubscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
+      }
       setAllCandles({});
     }
     setActiveView({ symbol, exchange, mode: 'chart' });
@@ -220,15 +232,44 @@ export default function App() {
   }, [activeView, socket]);
 
   const handleOpenTable = useCallback((symbol, exchange) => {
+    if (activeView?.symbol !== symbol || activeView?.exchange !== exchange) {
+      if (socket && activeView) {
+        socket.emit('unsubscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
+      }
+    }
     setActiveView({ symbol, exchange, mode: 'table' });
     if (socket) socket.emit('subscribe', { symbol, exchange });
-  }, [socket]);
+  }, [activeView, socket]);
+
+  const handleOpenAlert = useCallback((symbol, exchange) => {
+    setActiveAlertStock({ symbol, exchange });
+    setShowAlertsSidebar(true);
+  }, []);
 
   useEffect(() => {
     if (socket && connected && activeView) {
       socket.emit('subscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
     }
   }, [socket, connected, activeView]);
+
+  // Subscribe to all stocks in the active watchlist
+  useEffect(() => {
+    if (!socket || !connected || !selectedWatchlistId) return;
+    const wl = watchlists.find(w => w._id === selectedWatchlistId);
+    if (!wl || !wl.stocks || wl.stocks.length === 0) return;
+
+    // Subscribe to all watchlist stocks
+    wl.stocks.forEach(s => {
+      socket.emit('subscribe', { symbol: s.symbol, exchange: s.exchange });
+    });
+
+    // Unsubscribe from them when the watchlist changes or we unmount
+    return () => {
+      wl.stocks.forEach(s => {
+        socket.emit('unsubscribe', { symbol: s.symbol, exchange: s.exchange });
+      });
+    };
+  }, [socket, connected, selectedWatchlistId, watchlists]);
 
   const handleAddToWatchlist = async (symbol, exchange) => {
     if (!user) { setShowAuthModal(true); return; }
@@ -239,6 +280,28 @@ export default function App() {
   const handleRemoveFromWatchlist = async (symbol, exchange) => {
     if (!user || !selectedWatchlistId) return;
     try { await api.delete(`/watchlists/${selectedWatchlistId}/stocks/${symbol.toUpperCase()}`); fetchWatchlists(); } catch {}
+  };
+
+  const handleCreateWatchlist = async (e) => {
+    e.preventDefault();
+    if (!newWatchlistName.trim()) return;
+    try {
+      const { data } = await api.post('/watchlists', { name: newWatchlistName.trim() });
+      setNewWatchlistName('');
+      await fetchWatchlists();
+      if (data.watchlist?._id) setSelectedWatchlistId(data.watchlist._id);
+    } catch {}
+  };
+
+  const handleDeleteWatchlist = async () => {
+    const currentWl = watchlists.find(w => w._id === selectedWatchlistId);
+    if (!currentWl) return;
+    if (!window.confirm(`Delete watchlist "${currentWl.name}"?`)) return;
+    try {
+      await api.delete(`/watchlists/${selectedWatchlistId}`);
+      setSelectedWatchlistId('');
+      await fetchWatchlists();
+    } catch {}
   };
 
   const handleCandlesChange = useCallback((iv, candles, liveCandle) => {
@@ -266,39 +329,53 @@ export default function App() {
 
   const isChartView = activeView?.mode === 'chart';
   const isTableView = activeView?.mode === 'table';
-  const isDark      = theme === 'dark';
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
 
       {/* ── Top Navbar ─────────────────────────────────────────────────────── */}
-      <header className="flex items-center gap-4 px-4 py-2 border-b shrink-0 z-20 backdrop-blur-sm"
+      <header className="flex items-center gap-4 px-6 py-3 border-b shrink-0 z-20 backdrop-blur-sm"
               style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
         {/* Logo */}
-        <div className="flex items-center gap-2 shrink-0">
-          <BarChart2 size={18} className="text-indigo-400" />
-          <span className="text-sm font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>AlphaWatch</span>
-          <span className={`flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
-            connected ? 'text-emerald-400 border-emerald-800 bg-emerald-950/40' : 'text-rose-400 border-rose-800 bg-rose-950/40'
-          }`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-            {connected ? 'LIVE' : 'OFFLINE'}
-          </span>
-        </div>
+        <button onClick={() => setActiveView(null)} className="flex items-center gap-2 shrink-0 cursor-pointer bg-transparent border-0 outline-none text-left p-0">
+          <BarChart2 size={20} className="text-indigo-400" />
+          <span className="text-base font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>AlphaWatch</span>
+        </button>
+        <span className={`flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full border shrink-0 ${
+          connected ? 'text-emerald-400 border-emerald-800 bg-emerald-950/40' : 'text-rose-400 border-rose-800 bg-rose-950/40'
+        }`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+          {connected ? 'LIVE' : 'OFFLINE'}
+        </span>
 
         {/* Search bar */}
-        <div className="flex-1 max-w-lg mx-auto">
+        <div className="flex-1 max-w-md mx-auto">
           <SearchBar onSelect={(s, e) => handleOpenChart(s, e)} onAddToWatchlist={handleAddToWatchlist} showAddButton={!!user} />
         </div>
 
         {/* Right controls */}
-        <div className="shrink-0 flex items-center gap-2">
-          {isChartView && (
-            <IndicatorPicker activeIndicators={activeIndicators} onToggle={toggleIndicator} />
-          )}
-
+        <div className="shrink-0 flex items-center gap-3">
           {/* Theme toggle */}
           <ThemeToggle />
+
+          {/* Alerts Toggle Button */}
+          {user && (
+            <button
+              onClick={() => {
+                setShowAlertsSidebar(s => !s);
+                setActiveAlertStock(null);
+              }}
+              className="p-1.5 rounded-lg border transition-all cursor-pointer relative"
+              style={{
+                background: showAlertsSidebar ? 'rgba(99,102,241,0.15)' : 'var(--bg-elevated)',
+                borderColor: showAlertsSidebar ? 'rgba(99,102,241,0.4)' : 'var(--border-base)',
+                color: showAlertsSidebar ? 'rgb(129,140,248)' : 'var(--text-secondary)'
+              }}
+              title="Toggle Alerts Sidebar"
+            >
+              <Bell size={14} />
+            </button>
+          )}
 
           {/* Auth */}
           {user ? (
@@ -307,12 +384,12 @@ export default function App() {
               <button onClick={handleLogout}
                 className="p-1.5 rounded-lg transition-colors cursor-pointer hover:text-rose-400 hover:bg-rose-950/30"
                 style={{ color: 'var(--text-muted)' }} title="Sign out">
-                <LogOut size={14} />
+                <LogOut size={15} />
               </button>
             </>
           ) : (
             <button onClick={() => setShowAuthModal(true)}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors">
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors">
               Sign In
             </button>
           )}
@@ -321,117 +398,205 @@ export default function App() {
 
       {/* ── Main Body ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-
-        {/* Left sidebar — watchlist */}
-        <aside className="w-72 border-r flex flex-col overflow-hidden shrink-0"
-               style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
-          <div className="px-3 py-2 border-b shrink-0" style={{ borderColor: 'var(--border-base)' }}>
-            <h2 className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Watchlists</h2>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3">
-            {user ? (
-              <WatchlistPanel
-                watchlists={watchlists} selectedId={selectedWatchlistId}
-                onSelect={setSelectedWatchlistId} onRefresh={fetchWatchlists}
-                socket={socket} onOpenChart={handleOpenChart} onOpenTable={handleOpenTable}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full gap-3 py-8">
-                <BarChart2 size={32} style={{ color: 'var(--bg-elevated)' }} />
-                <p className="text-xs text-center" style={{ color: 'var(--text-faint)' }}>
-                  Sign in to save watchlists and get live stock data
-                </p>
-                <button onClick={() => setShowAuthModal(true)}
-                  className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-bold rounded-xl cursor-pointer hover:bg-indigo-600/30 transition-colors">
-                  Sign In
-                </button>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {!activeView && (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4">
-              <BarChart2 size={56} style={{ color: 'var(--bg-elevated)' }} />
-              <div className="text-center">
-                <p className="font-medium" style={{ color: 'var(--text-faint)' }}>Select a stock to get started</p>
-                <p className="text-sm mt-1" style={{ color: 'var(--text-faint)', opacity: 0.6 }}>
-                  Use Search above, or click Chart or Data Table on any watchlist stock
-                </p>
-              </div>
-            </div>
-          )}
-
-          {isChartView && (
-            <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
-              <LiveTickerBar symbol={activeView.symbol} exchange={activeView.exchange} socket={socket} />
-
-              {user && selectedWatchlistId && (
-                <div className="flex items-center gap-2">
-                  {isInWatchlist ? (
-                    <button onClick={() => handleRemoveFromWatchlist(activeView.symbol, activeView.exchange)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/30 border border-rose-700/50 hover:border-rose-500 text-rose-400 hover:text-rose-300 text-xs font-bold rounded-xl cursor-pointer transition-colors">
-                      <Minus size={12} /> Remove from Watchlist
-                    </button>
-                  ) : (
-                    <button onClick={() => handleAddToWatchlist(activeView.symbol, activeView.exchange)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 border text-xs font-bold rounded-xl cursor-pointer transition-colors hover:border-indigo-500 hover:text-indigo-400"
-                      style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-muted)', color: 'var(--text-secondary)' }}>
-                      <Plus size={12} /> Add to Watchlist
-                    </button>
-                  )}
-                  <button onClick={() => setActiveView(v => ({ ...v, mode: 'table' }))}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border text-xs font-bold rounded-xl cursor-pointer transition-colors hover:border-sky-500 hover:text-sky-400"
-                    style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-muted)', color: 'var(--text-secondary)' }}>
-                    <Table2 size={12} /> Data Table
+        {/* Main scrollable column */}
+        <div className="flex-1 overflow-y-auto">
+          <main className="flex flex-col p-6 gap-6 max-w-7xl mx-auto w-full">
+            {!user ? (
+              <div className="flex flex-col items-center justify-center py-24 gap-4">
+                <BarChart2 size={64} style={{ color: 'var(--bg-elevated)' }} />
+                <div className="text-center">
+                  <p className="font-extrabold text-xl" style={{ color: 'var(--text-primary)' }}>Welcome to AlphaWatch</p>
+                  <p className="text-xs mt-1 mb-6 max-w-sm mx-auto" style={{ color: 'var(--text-faint)' }}>
+                    Sign in to build your dashboard, track real-time stocks, compute technical indicators, and create price alerts.
+                  </p>
+                  <button onClick={() => setShowAuthModal(true)}
+                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors shadow-lg shadow-indigo-600/20">
+                    Sign In to Get Started
                   </button>
                 </div>
-              )}
-
-              <div className="flex-1 overflow-hidden overflow-y-auto">
-                <TradingChart
-                  symbol={activeView.symbol} exchange={activeView.exchange}
-                  socket={socket} activeIndicators={activeIndicators}
-                  onCandlesChange={handleCandlesChange} onIntervalChange={setCurrentInterval}
-                />
               </div>
-            </div>
-          )}
+            ) : (
+              <>
+                {/* Watchlist Selection / Management Toolbar (Only visible in Watchlist state) */}
+                {!activeView && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-xl"
+                       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+                    
+                    {/* Select watchlist dropdown */}
+                    <div className="flex items-center gap-3">
+                      <div className="relative shrink-0 min-w-[180px]">
+                        <select value={selectedWatchlistId} onChange={e => setSelectedWatchlistId(e.target.value)}
+                          className="w-full border rounded-xl px-3 py-1.5 text-xs font-bold appearance-none focus:outline-none cursor-pointer pr-8"
+                          style={{ background: 'var(--bg-base)', borderColor: 'var(--border-base)', color: 'var(--text-primary)' }}>
+                          {watchlists.length === 0 ? (
+                            <option value="">No watchlists</option>
+                          ) : (
+                            watchlists.map(w => <option key={w._id} value={w._id}>{w.name}</option>)
+                          )}
+                        </select>
+                        <ChevronDown size={12} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-muted)' }} />
+                      </div>
 
-          {isTableView && (
-            <div className="flex-1 overflow-hidden p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <button onClick={() => setActiveView(v => ({ ...v, mode: 'chart' }))}
-                  className="flex items-center gap-1.5 px-3 py-1.5 border text-xs font-bold rounded-xl cursor-pointer transition-colors hover:border-indigo-500 hover:text-indigo-400"
-                  style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-muted)', color: 'var(--text-secondary)' }}>
-                  <BarChart2 size={12} /> View Chart
-                </button>
-              </div>
-              <div className="h-full overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border-base)' }}>
-                <StockDataTable symbol={activeView.symbol} exchange={activeView.exchange} socket={socket} />
-              </div>
-            </div>
-          )}
-        </main>
+                      {/* Delete watchlist button */}
+                      {currentWatchlist && (
+                        <button onClick={handleDeleteWatchlist} title="Delete current watchlist"
+                          className="p-2 border rounded-xl hover:text-rose-400 hover:border-rose-900/30 transition-colors cursor-pointer"
+                          style={{ background: 'var(--bg-base)', borderColor: 'var(--border-base)', color: 'var(--text-faint)' }}>
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
 
-        {/* Right sidebar — Alerts */}
-        <aside className="w-64 border-l p-3 flex flex-col gap-3 overflow-y-auto shrink-0"
-               style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
-          <h2 className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Price Alerts</h2>
-          {user ? (
-            <AlertsPanel symbol={activeView?.symbol} exchange={activeView?.exchange} socket={socket} />
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-3 py-8">
-              <p className="text-xs text-center" style={{ color: 'var(--text-faint)' }}>Sign in to create price alerts</p>
-              <button onClick={() => setShowAuthModal(true)}
-                className="px-3 py-1.5 bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 text-xs font-bold rounded-xl cursor-pointer hover:bg-indigo-600/30 transition-colors">
-                Sign In
+                    {/* Create watchlist inline form */}
+                    <form onSubmit={handleCreateWatchlist} className="flex gap-2">
+                      <input value={newWatchlistName} onChange={e => setNewWatchlistName(e.target.value)} placeholder="New watchlist name..."
+                        className="border rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+                        style={{ background: 'var(--bg-base)', borderColor: 'var(--border-base)', color: 'var(--text-primary)' }} />
+                      <button type="submit" className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl cursor-pointer transition-colors">
+                        <Plus size={13} />
+                      </button>
+                    </form>
+                  </div>
+                )}
+
+                {/* View Switcher: Watchlist OR Chart OR Depth Table */}
+                {!activeView ? (
+                  <WatchlistDashboard
+                    watchlists={watchlists}
+                    selectedId={selectedWatchlistId}
+                    socket={socket}
+                    onOpenChart={handleOpenChart}
+                    onOpenTable={handleOpenTable}
+                    onOpenAlert={handleOpenAlert}
+                    onRemoveStock={handleRemoveFromWatchlist}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-6 w-full animate-fade-in">
+                    {/* View Switcher Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4" style={{ borderColor: 'var(--border-base)' }}>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h1 className="text-xl font-black tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                            {activeView.symbol} Workspace
+                          </h1>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                            {activeView.exchange}
+                          </span>
+                        </div>
+                        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                          Analyzing {activeView.symbol} on {activeView.exchange} in {activeView.mode === 'chart' ? 'Interactive Chart' : 'Depth Data Table'} mode
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0">
+                        {/* Segmented View Switcher Control */}
+                        <div className="flex items-center gap-1.5 p-0.5 rounded-lg border" style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}>
+                          <button
+                            onClick={() => {
+                              if (socket && activeView) {
+                                socket.emit('unsubscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
+                              }
+                              setActiveView(null);
+                            }}
+                            className="px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all hover:text-indigo-400"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            Watchlist
+                          </button>
+                          <button
+                            onClick={() => setActiveView(v => ({ ...v, mode: 'chart' }))}
+                            className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                              isChartView ? 'bg-indigo-600 text-white shadow-md' : 'hover:text-indigo-400'
+                            }`}
+                            style={!isChartView ? { color: 'var(--text-muted)' } : {}}
+                          >
+                            Chart
+                          </button>
+                          <button
+                            onClick={() => setActiveView(v => ({ ...v, mode: 'table' }))}
+                            className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                              isTableView ? 'bg-indigo-600 text-white shadow-md' : 'hover:text-indigo-400'
+                            }`}
+                            style={!isTableView ? { color: 'var(--text-muted)' } : {}}
+                          >
+                            Depth Table
+                          </button>
+                        </div>
+
+                        {isChartView && (
+                          <IndicatorPicker activeIndicators={activeIndicators} onToggle={toggleIndicator} />
+                        )}
+
+                        {/* Back Close Button */}
+                        <button
+                          onClick={() => {
+                            if (socket && activeView) {
+                              socket.emit('unsubscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
+                            }
+                            setActiveView(null);
+                          }}
+                          className="p-2 border rounded-xl hover:text-rose-400 hover:border-rose-900/30 transition-colors cursor-pointer"
+                          style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-faint)' }}
+                          title="Back to Watchlist"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* View Content Area */}
+                    <div className="w-full">
+                      {isChartView && (
+                        <div className="flex flex-col gap-4">
+                          <LiveTickerBar symbol={activeView.symbol} exchange={activeView.exchange} socket={socket} />
+                          <TradingChart
+                            symbol={activeView.symbol} exchange={activeView.exchange}
+                            socket={socket} activeIndicators={activeIndicators}
+                            onCandlesChange={handleCandlesChange} onIntervalChange={setCurrentInterval}
+                          />
+                        </div>
+                      )}
+                      
+                      {isTableView && (
+                        <div className="h-[600px] w-full rounded-xl overflow-hidden border" style={{ borderColor: 'var(--border-base)' }}>
+                          <StockDataTable symbol={activeView.symbol} exchange={activeView.exchange} socket={socket} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </main>
+        </div>
+
+        {/* Sliding Right Alerts Sidebar */}
+        {showAlertsSidebar && user && (
+          <aside className="w-80 border-l flex flex-col overflow-hidden shrink-0 animate-fade-in"
+                 style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+            <div className="px-4 py-3 border-b flex items-center justify-between shrink-0" style={{ borderColor: 'var(--border-base)' }}>
+              <span className="text-xs font-black uppercase tracking-wider text-slate-100">Price Alerts</span>
+              <button
+                onClick={() => {
+                  setShowAlertsSidebar(false);
+                  setActiveAlertStock(null);
+                }}
+                className="p-1 hover:text-rose-400 cursor-pointer rounded-lg hover:bg-rose-950/30 transition-colors"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <X size={14} />
               </button>
             </div>
-          )}
-        </aside>
+            <div className="flex-1 overflow-y-auto p-4">
+              <AlertsPanel
+                symbol={activeAlertStock?.symbol}
+                exchange={activeAlertStock?.exchange}
+                socket={socket}
+                onClearFilter={() => setActiveAlertStock(null)}
+              />
+            </div>
+          </aside>
+        )}
       </div>
 
       {showAuthModal && (

@@ -111,3 +111,80 @@ exports.sendAlertEmail = async (toEmail, alert, symbol, exchange, ltp) => {
     console.error('[EmailService] Failed to send email alert:', err.message);
   }
 };
+
+exports.sendCombinedAlertEmail = async (toEmail, alert, triggeredStocks) => {
+  try {
+    const client = await getTransporter();
+    const from = process.env.SMTP_FROM || '"AlphaWatch Alerts" <alerts@alphawatch.com>';
+    
+    const stockLabels = triggeredStocks.map(s => `${s.exchange}:${s.symbol}`).join(', ');
+    const subject = `🔔 Alert Triggered: ${alert.name} for ${stockLabels}`;
+
+    let stocksHtml = '';
+    for (const stock of triggeredStocks) {
+      const conditionsListHtml = stock.conditions.map(c => {
+        const rhs = c.rightType === 'value' ? Number(c.rightValue).toFixed(2) : `${c.rightIndicator} (${Number(c.rightActual).toFixed(2)})`;
+        const lhsVal = Number(c.leftActual).toFixed(2);
+        return `
+          <li style="margin-bottom: 4px;">
+            <b>${c.leftIndicator} (${c.timeframe})</b>: ${lhsVal} ${c.operator} ${rhs} ✓
+          </li>
+        `;
+      }).join('');
+
+      stocksHtml += `
+        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; text-align: left;">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; margin-bottom: 10px;">
+            <span style="font-size: 14px; font-weight: 800; color: #4f46e5;">${stock.exchange}:${stock.symbol}</span>
+            <span style="font-size: 13px; font-weight: 800; color: #0f172a; background-color: #f1f5f9; padding: 2px 8px; border-radius: 4px;">LTP: ₹${Number(stock.ltp).toFixed(2)}</span>
+          </div>
+          <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #334155;">
+            ${conditionsListHtml}
+          </ul>
+        </div>
+      `;
+    }
+
+    const html = `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div style="background-color: #4f46e5; color: white; padding: 24px; text-align: center;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.03em;">AlphaWatch Alerts</h1>
+          <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.8;">Condition Match Alert Triggered</p>
+        </div>
+        <div style="padding: 24px; background-color: #ffffff; color: #1e293b; line-height: 1.6;">
+          <p style="margin-top: 0;">Hi there,</p>
+          <p>Your alert <b>"${alert.name}"</b> was triggered because the following stock(s) satisfied all conditions:</p>
+          
+          <div style="margin: 20px 0;">
+            ${stocksHtml}
+          </div>
+
+          <p style="font-size: 11px; color: #94a3b8; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+            Triggered At: ${new Date().toLocaleString('en-IN')}<br/>
+            Alert ID: ${alert._id.toString()}<br/>
+            Type: ${alert.targetType === 'watchlist' ? 'Watchlist' : 'Specific Stocks'}
+          </p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+          This email was sent dynamically by the AlphaWatch alert scanner engine.
+        </div>
+      </div>
+    `;
+
+    const info = await client.sendMail({
+      from,
+      to: toEmail,
+      subject,
+      html
+    });
+
+    console.log(`✉️  Combined alert email sent successfully to ${toEmail} for [${stockLabels}] [MessageID: ${info.messageId}]`);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) {
+      console.log(`✉️  [Ethereal Email Sandbox] View triggered email: ${previewUrl}`);
+    }
+  } catch (err) {
+    console.error('[EmailService] Failed to send combined email alert:', err.message);
+  }
+};
+

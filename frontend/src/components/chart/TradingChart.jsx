@@ -61,11 +61,181 @@ export default function TradingChart({
   const charts     = useRef({});
   const series     = useRef({});
 
+  const indicatorsRef = useRef(null);
+  const candlesRef    = useRef([]);
+  const timeToIdxRef  = useRef(new Map());
+
+  const formatVolume = (val) => {
+    if (val >= 1e9) return (val / 1e9).toFixed(2) + 'B';
+    if (val >= 1e6) return (val / 1e6).toFixed(2) + 'M';
+    if (val >= 1e3) return (val / 1e3).toFixed(2) + 'K';
+    return val.toFixed(0);
+  };
+
+  const updateLegends = (idx) => {
+    const candles = candlesRef.current || [];
+    const ind = indicatorsRef.current;
+    
+    if (candles.length === 0) return;
+    
+    const i = (idx !== null && idx !== undefined && idx >= 0 && idx < candles.length) ? idx : (candles.length - 1);
+    const candle = candles[i];
+    if (!candle) return;
+    
+    // 1. Update main chart OHLCV
+    const mainOhlcvEl = document.getElementById('main-chart-ohlcv-legend');
+    if (mainOhlcvEl) {
+      const isUp = candle.close >= candle.open;
+      const colorClass = isUp ? 'text-emerald-500' : 'text-rose-500';
+      mainOhlcvEl.innerHTML = `
+        <span class="text-slate-100 font-extrabold mr-1.5">${symbol}</span>
+        <span class="mr-1.5">O: <span class="${colorClass}">${(+candle.open).toFixed(2)}</span></span>
+        <span class="mr-1.5">H: <span class="${colorClass}">${(+candle.high).toFixed(2)}</span></span>
+        <span class="mr-1.5">L: <span class="${colorClass}">${(+candle.low).toFixed(2)}</span></span>
+        <span class="mr-1.5">C: <span class="${colorClass}">${(+candle.close).toFixed(2)}</span></span>
+        <span>V: <span class="text-slate-300">${formatVolume(+candle.volume)}</span></span>
+      `;
+    }
+    
+    // 2. Update overlays legend
+    const mainOverlayEl = document.getElementById('main-chart-overlay-legend');
+    if (mainOverlayEl) {
+      let overlayHtml = '';
+      
+      // Check SMA
+      const smaConfigs = [
+        { key: 'SMA20', label: 'SMA 20', color: '#f59e0b', field: 'sma20' },
+        { key: 'SMA50', label: 'SMA 50', color: '#3b82f6', field: 'sma50' },
+        { key: 'SMA100', label: 'SMA 100', color: '#10b981', field: 'sma100' },
+        { key: 'SMA200', label: 'SMA 200', color: '#f43f5e', field: 'sma200' },
+      ];
+      smaConfigs.forEach(cfg => {
+        if (activeIndicators.includes(cfg.key) && ind && ind[cfg.field] && ind[cfg.field][i] != null) {
+          overlayHtml += `<span style="color: ${cfg.color}">${cfg.label}: ${ind[cfg.field][i].toFixed(2)}</span>`;
+        }
+      });
+      
+      // Check EMA
+      const emaConfigs = [
+        { key: 'EMA20', label: 'EMA 20', color: '#8b5cf6', field: 'ema20' },
+        { key: 'EMA50', label: 'EMA 50', color: '#ec4899', field: 'ema50' },
+        { key: 'EMA100', label: 'EMA 100', color: '#06b6d4', field: 'ema100' },
+        { key: 'EMA200', label: 'EMA 200', color: '#f97316', field: 'ema200' },
+      ];
+      emaConfigs.forEach(cfg => {
+        if (activeIndicators.includes(cfg.key) && ind && ind[cfg.field] && ind[cfg.field][i] != null) {
+          overlayHtml += `<span style="color: ${cfg.color}">${cfg.label}: ${ind[cfg.field][i].toFixed(2)}</span>`;
+        }
+      });
+      
+      // Check BB
+      if (activeIndicators.includes('BB') && ind && ind.bbUpper && ind.bbUpper[i] != null) {
+        overlayHtml += `
+          <span style="color: #475569" class="mr-1">BB (20, 2):</span>
+          <span style="color: #94a3b8" class="mr-1">basis: ${ind.bbMiddle[i].toFixed(2)}</span>
+          <span style="color: #94a3b8" class="mr-1">upper: ${ind.bbUpper[i].toFixed(2)}</span>
+          <span style="color: #94a3b8">lower: ${ind.bbLower[i].toFixed(2)}</span>
+        `;
+      }
+      
+      mainOverlayEl.innerHTML = overlayHtml;
+    }
+    
+    // 3. Update sub-chart legends
+    const subChartKeys = Object.keys(SUB_CHARTS).filter(k => activeIndicators.includes(k));
+    subChartKeys.forEach(key => {
+      const el = document.getElementById(`sub-legend-${key}`);
+      if (!el) return;
+      
+      let html = '';
+      if (ind) {
+        switch (key) {
+          case 'RSI':
+            if (ind.rsi14 && ind.rsi14[i] != null) {
+              html = `<span style="color: #a78bfa">rsi: ${ind.rsi14[i].toFixed(2)}</span>`;
+            }
+            break;
+          case 'MACD':
+            if (ind.macdLine && ind.macdLine[i] != null) {
+              const histColor = ind.macdHist[i] >= 0 ? 'text-emerald-500' : 'text-rose-500';
+              html = `
+                <span style="color: #38bdf8" class="mr-2">macd: ${ind.macdLine[i].toFixed(2)}</span>
+                <span style="color: #fb923c" class="mr-2">sig: ${ind.macdSignal[i].toFixed(2)}</span>
+                <span class="${histColor}">hist: ${ind.macdHist[i].toFixed(2)}</span>
+              `;
+            }
+            break;
+          case 'ADX':
+            if (ind.adx && ind.adx[i] != null) {
+              html = `
+                <span style="color: #facc15" class="mr-2">adx: ${ind.adx[i].toFixed(2)}</span>
+                <span style="color: #4ade80" class="mr-2">+di: ${ind.plusDI[i].toFixed(2)}</span>
+                <span style="color: #f87171">-di: ${ind.minusDI[i].toFixed(2)}</span>
+              `;
+            }
+            break;
+          case 'MFI':
+            if (ind.mfi14 && ind.mfi14[i] != null) {
+              html = `<span style="color: #22d3ee">mfi: ${ind.mfi14[i].toFixed(2)}</span>`;
+            }
+            break;
+          case 'SMI':
+            if (ind.smiLine && ind.smiLine[i] != null) {
+              html = `
+                <span style="color: #34d399" class="mr-2">smi: ${ind.smiLine[i].toFixed(2)}</span>
+                <span style="color: #fbbf24">sig: ${ind.smiSignal[i].toFixed(2)}</span>
+              `;
+            }
+            break;
+          case 'DELTASMI':
+            if (ind.deltaSMI && ind.deltaSMI[i] != null) {
+              html = `<span style="color: #34d399">delta smi: ${ind.deltaSMI[i].toFixed(2)}</span>`;
+            }
+            break;
+          case 'DELTASMI_SIGNAL':
+            if (ind.deltaSMISignal && ind.deltaSMISignal[i] != null) {
+              html = `<span style="color: #fbbf24">delta smi sig: ${ind.deltaSMISignal[i].toFixed(2)}</span>`;
+            }
+            break;
+          case 'SMI_DIST':
+            if (ind.smiDist && ind.smiDist[i] != null) {
+              html = `<span style="color: #38bdf8">smi dist: ${ind.smiDist[i].toFixed(2)}</span>`;
+            }
+            break;
+          case 'DELTASMI_DIST':
+            if (ind.deltaSMIDist && ind.deltaSMIDist[i] != null) {
+              html = `<span style="color: #ec4899">delta smi dist: ${ind.deltaSMIDist[i].toFixed(2)}</span>`;
+            }
+            break;
+        }
+      }
+      el.innerHTML = html;
+    });
+  };
+
   const [interval, setIntervalVal] = useState(
     () => localStorage.getItem('aw_interval') || '5m'
   );
   const [loading, setLoading]      = useState(false);
   const [candles, setCandles]      = useState([]);
+
+  const [showIlliquidWarning, setShowIlliquidWarning] = useState(false);
+  const [dismissedKey, setDismissedKey] = useState(null);
+
+  useEffect(() => {
+    const key = `${exchange}:${symbol}:${interval}`;
+    if (!loading && candles.length < 50 && dismissedKey !== key) {
+      setShowIlliquidWarning(true);
+    } else {
+      setShowIlliquidWarning(false);
+    }
+  }, [candles.length, symbol, exchange, interval, dismissedKey, loading]);
+
+  const handleDismissWarning = () => {
+    const key = `${exchange}:${symbol}:${interval}`;
+    setDismissedKey(key);
+    setShowIlliquidWarning(false);
+  };
 
   const handleIntervalChange = (tf) => {
     setIntervalVal(tf);
@@ -271,6 +441,7 @@ export default function TradingChart({
     const times = candles.map(c => toTvTime(c.timestamp));
 
     fetchIndicators(exchange, symbol, interval).then(ind => {
+      indicatorsRef.current = ind;
       // ── Overlay: SMA ────────────────────────────────────────────────────
       const smaConfigs = [
         { period: 20,  color: '#f59e0b', key: 'sma20',  indKey: 'sma20'  },
@@ -368,6 +539,7 @@ export default function TradingChart({
       if (activeIndicators.includes('DELTASMI_DIST') && charts.current.DELTASMI_DIST && series.current.deltaSmiDistLine) {
         series.current.deltaSmiDistLine.setData(toData(ind.deltaSMIDist, times));
       }
+      updateLegends(null);
     }).catch(err => {
       console.warn('[TradingChart] indicator fetch failed:', err.message);
     });
@@ -413,11 +585,157 @@ export default function TradingChart({
     };
   }, [socket, interval, exchange, symbol]);
 
+  // ── 7. Synchronize crosshair & timescales + display legend ──────────────────
+  useEffect(() => {
+    const activeCharts = Object.entries(charts.current).filter(([_, ch]) => !!ch);
+    if (activeCharts.length === 0) return;
+
+    // Build the time scale lookup map
+    const map = new Map();
+    candles.forEach((c, idx) => {
+      map.set(toTvTime(c.timestamp), idx);
+    });
+    timeToIdxRef.current = map;
+    
+    // Also update references for handlers to avoid stale closures
+    candlesRef.current = candles;
+
+    // Initial legend display
+    updateLegends(null);
+
+    let isSyncingRange = false;
+
+    const rangeHandlers = new Map();
+    const crosshairHandlers = new Map();
+
+    const getPrimarySeriesAndValue = (chartKey, idx, candle, ind) => {
+      if (chartKey === 'main') {
+        return {
+          series: series.current.candle,
+          value: candle ? +candle.close : null
+        };
+      }
+      if (!ind) return null;
+      switch (chartKey) {
+        case 'RSI':
+          return { series: series.current.rsiLine, value: ind.rsi14 ? ind.rsi14[idx] : null };
+        case 'MACD':
+          return { series: series.current.macdLine, value: ind.macdLine ? ind.macdLine[idx] : null };
+        case 'ADX':
+          return { series: series.current.adxLine, value: ind.adx ? ind.adx[idx] : null };
+        case 'MFI':
+          return { series: series.current.mfiLine, value: ind.mfi14 ? ind.mfi14[idx] : null };
+        case 'SMI':
+          return { series: series.current.smiLine, value: ind.smiLine ? ind.smiLine[idx] : null };
+        case 'DELTASMI':
+          return { series: series.current.deltaSmiLine, value: ind.deltaSMI ? ind.deltaSMI[idx] : null };
+        case 'DELTASMI_SIGNAL':
+          return { series: series.current.deltaSmiSignalLine, value: ind.deltaSMISignal ? ind.deltaSMISignal[idx] : null };
+        case 'SMI_DIST':
+          return { series: series.current.smiDistLine, value: ind.smiDist ? ind.smiDist[idx] : null };
+        case 'DELTASMI_DIST':
+          return { series: series.current.deltaSmiDistLine, value: ind.deltaSMIDist ? ind.deltaSMIDist[idx] : null };
+      }
+      return null;
+    };
+
+    activeCharts.forEach(([key, chart]) => {
+      // 1. Time scale sync handler
+      const rangeHandler = (range) => {
+        if (isSyncingRange || !range) return;
+        isSyncingRange = true;
+        activeCharts.forEach(([otherKey, otherChart]) => {
+          if (otherKey !== key) {
+            otherChart.timeScale().setVisibleLogicalRange(range);
+          }
+        });
+        isSyncingRange = false;
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
+      rangeHandlers.set(key, rangeHandler);
+
+      // 2. Crosshair sync handler
+      const crosshairHandler = (param) => {
+        // Only sync if the event was triggered by user interaction (mouse/touch)
+        if (!param.sourceEvent) {
+          // If this is a programmatic update, it won't have a sourceEvent
+          return;
+        }
+
+        const time = param.time;
+        if (time) {
+          const idx = timeToIdxRef.current.get(time);
+          if (idx !== undefined) {
+            // Update legends first
+            updateLegends(idx);
+
+            // Sync other charts
+            const candle = candlesRef.current[idx];
+            const ind = indicatorsRef.current;
+            activeCharts.forEach(([otherKey, otherChart]) => {
+              if (otherKey !== key) {
+                const info = getPrimarySeriesAndValue(otherKey, idx, candle, ind);
+                if (info && info.series && info.value !== null && info.value !== undefined) {
+                  otherChart.setCrosshairPosition(info.value, time, info.series);
+                } else {
+                  otherChart.clearCrosshairPosition();
+                }
+              }
+            });
+          }
+        } else {
+          // Mouse left the chart area
+          updateLegends(null);
+          activeCharts.forEach(([otherKey, otherChart]) => {
+            if (otherKey !== key) {
+              otherChart.clearCrosshairPosition();
+            }
+          });
+        }
+      };
+      chart.subscribeCrosshairMove(crosshairHandler);
+      crosshairHandlers.set(key, crosshairHandler);
+    });
+
+    // Cleanup subscriptions on deps change / unmount
+    return () => {
+      activeCharts.forEach(([key, chart]) => {
+        try {
+          const rh = rangeHandlers.get(key);
+          if (rh) chart.timeScale().unsubscribeVisibleLogicalRangeChange(rh);
+        } catch (_) {}
+        
+        try {
+          const ch = crosshairHandlers.get(key);
+          if (ch) chart.unsubscribeCrosshairMove(ch);
+        } catch (_) {}
+      });
+    };
+  }, [candles, activeIndicators, symbol]);
+
   const subChartKeys = Object.keys(SUB_CHARTS).filter(k => activeIndicators.includes(k));
   const isDark = theme === 'dark';
 
   return (
-    <div className="space-y-1 w-full">
+    <div className="space-y-1 w-full relative">
+      {showIlliquidWarning && (
+        <div className="absolute bottom-4 right-4 z-40 bg-slate-900/95 backdrop-blur border border-amber-500/30 text-amber-200 rounded-xl p-3 text-[10px] max-w-[280px] shadow-2xl flex items-start gap-2.5 animate-fade-in pointer-events-auto">
+          <span className="text-amber-400 font-extrabold shrink-0 mt-0.5">⚠️</span>
+          <div className="flex-1">
+            <p className="font-bold text-slate-100">Thinly Traded Stock</p>
+            <p className="mt-0.5 leading-relaxed text-amber-200/90">
+              You might be getting fewer candles because this stock is thinly traded or illiquid. If you face any issues, please feel free to contact us.
+            </p>
+          </div>
+          <button 
+            onClick={handleDismissWarning} 
+            className="text-amber-500 hover:text-amber-300 transition-colors cursor-pointer shrink-0 font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Timeframe selector */}
       <div className="flex items-center justify-end">
         <div
@@ -451,16 +769,21 @@ export default function TradingChart({
             <RefreshCw className="text-indigo-400 animate-spin" size={22} />
           </div>
         )}
+        <div className="absolute top-2.5 left-3 z-10 pointer-events-none font-mono text-[10px] space-y-0.5 leading-tight select-none flex flex-col gap-1">
+          <div id="main-chart-ohlcv-legend" className="flex flex-wrap gap-2 text-slate-300" />
+          <div id="main-chart-overlay-legend" className="flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400" />
+        </div>
         <div ref={mainRef} className="w-full" />
       </div>
 
       {/* Sub-charts */}
       {subChartKeys.map(key => (
-        <div key={key} className="rounded-xl overflow-hidden border" style={{ borderColor: 'var(--border-base)' }}>
-          <p className="text-[9px] font-black uppercase tracking-widest px-3 pt-1.5" style={{ color: 'var(--text-muted)' }}>
-            {SUB_CHARTS[key].label}
-          </p>
-          <div ref={el => { subRefs.current[key] = el; }} className="w-full" />
+        <div key={key} className="rounded-xl overflow-hidden border relative" style={{ borderColor: 'var(--border-base)' }}>
+          <div className="absolute top-1.5 left-3 z-10 pointer-events-none font-mono text-[9px] font-black uppercase tracking-widest flex gap-3" style={{ color: 'var(--text-muted)' }}>
+            <span>{SUB_CHARTS[key].label}</span>
+            <span id={`sub-legend-${key}`} className="lowercase font-bold tracking-normal text-slate-400" />
+          </div>
+          <div ref={el => { subRefs.current[key] = el; }} className="w-full pt-4" />
         </div>
       ))}
     </div>

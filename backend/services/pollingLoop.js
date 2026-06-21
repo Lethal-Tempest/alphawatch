@@ -1,9 +1,9 @@
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // backend/services/pollingLoop.js
 //
 // Maintains the set of symbols currently being polled. On each 5-second tick:
-//  1. Fetch OHLCV quote from AngelOne for every subscribed symbol
-//  2. Always broadcast the raw tick (for live price header display)
+//  1. Fetch OHLCV quotes in batch from AngelOne for all subscribed symbols
+//  2. Always broadcast the raw ticks (for live price header display)
 //  3. If market is open AND volume > 0:
 //       - Update the in-memory candle aggregator
 //       - Run the alert engine
@@ -12,7 +12,7 @@
 // Zero-volume ticks are NOT fed into the candle aggregator. They represent
 // periods with no real trades (illiquid stocks, momentary stale quotes) and
 // would create phantom zero-volume candles that corrupt indicator math.
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 const angelOne         = require('./angelOneService');
 const candleAggregator = require('./candleAggregator');
 const alertEngine      = require('./alertEngine');
@@ -46,9 +46,9 @@ exports.unsubscribe = (key) => {
 exports.getLiveState     = (key) => liveMarketState[key];
 exports.getSubscriptions = ()    => Array.from(activeSubscriptions);
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Helper: compare two candle objects for meaningful changes.
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 function candleChanged(prev, next) {
   if (!prev) return true;
   const r = (n) => Math.round(n * 100) / 100;
@@ -61,35 +61,65 @@ function candleChanged(prev, next) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main polling cycle — called every 5 seconds by server.js
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Main polling cycle - called every 5 seconds by server.js
+// -----------------------------------------------------------------------------
 exports.runPollingCycle = async () => {
-  const alertKeys = await alertEngine.getActiveAlertKeys();
+  const activeAlerts = await alertEngine.getActiveAlerts();
+  const alertKeys = await alertEngine.getActiveAlertKeys(activeAlerts);
   const allKeys = new Set([...activeSubscriptions, ...alertKeys]);
   if (allKeys.size === 0) return;
 
-  // NSE/BSE: 09:15 – 15:30 IST (server must run with TZ=Asia/Kolkata)
+  // NSE/BSE: 09:15 - 15:30 IST (server must run with TZ=Asia/Kolkata)
   const now     = new Date();
   const timeInt = now.getHours() * 100 + now.getMinutes();
   const isMarketOpen = timeInt >= 915 && timeInt <= 1530;
 
+  // Resolve scrip tokens for all keys
+  const items = [];
+  const keyToScrip = {};
+
   for (const key of allKeys) {
-    try {
-      const [exchange, symbol] = key.split(':');
+    const [exchange, symbol] = key.split(':');
+    const scripMatch = angelOne.resolveToken(exchange, symbol);
+    if (!scripMatch) {
+      console.warn(`[Polling] No token found for ${key} - skipping`);
+      continue;
+    }
+    items.push({ exchange, token: scripMatch.token, symbol });
+    keyToScrip[key] = scripMatch;
+  }
 
-      const scripMatch = angelOne.resolveToken(exchange, symbol);
-      if (!scripMatch) {
-        console.warn(`[Polling] No token found for ${key} — skipping`);
-        continue;
-      }
+  if (items.length === 0) return;
 
-      const data = await angelOne.fetchQuote(exchange, scripMatch.token);
+  try {
+    // Fetch all quotes in batch
+    const fetchedQuotes = await angelOne.fetchQuotesBatch(items);
+    if (!fetchedQuotes || fetchedQuotes.length === 0) {
+      console.warn(`[Polling] Batch quote returned no data`);
+      return;
+    }
+
+    // Index fetched quotes by exchange + token for quick access
+    const quoteMap = {};
+    for (const q of fetchedQuotes) {
+      const qKey = `${q.exchange.toUpperCase()}:${q.symbolToken}`;
+      quoteMap[qKey] = q;
+    }
+
+    // Process each resolved key
+    for (const key of allKeys) {
+      const scripMatch = keyToScrip[key];
+      if (!scripMatch) continue;
+
+      const qKey = `${scripMatch.exch_seg.toUpperCase()}:${scripMatch.token}`;
+      const data = quoteMap[qKey];
       if (!data) {
-        console.warn(`[Polling] Null quote returned for ${key}`);
+        console.warn(`[Polling] No fetched quote data found in batch for ${key}`);
         continue;
       }
 
+      const [exchange, symbol] = key.split(':');
       const volume = parseInt(data.tradeVolume, 10) || 0;
 
       const tick = {
@@ -106,27 +136,18 @@ exports.runPollingCycle = async () => {
       };
 
       // Cache and broadcast the raw tick regardless of volume
-      // (the live ticker bar / price header always needs a fresh price)
       liveMarketState[key] = tick;
       if (ioInstance && activeSubscriptions.has(key)) {
         ioInstance.to(`ticker:${key}`).emit('tick', tick);
       }
 
-      // Evaluate price/indicator alerts for this symbol
-      // This happens on every tick (even when the market is closed or volume is 0),
-      // so alerts can be evaluated and triggered immediately.
-      await alertEngine.evaluate(key, tick);
-
-      // ── ZERO-VOLUME GUARD ───────────────────────────────────────────────
-      // Do NOT aggregate or emit candle updates for zero-volume ticks.
-      // These represent periods with no real trades and must not create
-      // phantom candles or update existing candle state.
+      // --- ZERO-VOLUME GUARD ---
       if (!isMarketOpen || volume <= 0) continue;
 
       // Feed the real tick into the candle aggregator
       candleAggregator.updateCandleBuffer(key, tick);
 
-      // ── Emit candle_update only when the candle actually changed ─────────
+      // --- Emit candle_update only when the candle actually changed ---
       if (!ioInstance) continue;
       if (!lastBroadcastCandle[key]) lastBroadcastCandle[key] = {};
 
@@ -149,9 +170,12 @@ exports.runPollingCycle = async () => {
           }
         }
       }
-
-    } catch (err) {
-      console.error(`[Polling] Failed for ${key}:`, err.message);
     }
+
+    // Evaluate all active alerts once for the entire polling cycle
+    await alertEngine.evaluateAll(activeAlerts, liveMarketState);
+
+  } catch (err) {
+    console.error(`[Polling] Batch polling cycle failed:`, err.message);
   }
 };

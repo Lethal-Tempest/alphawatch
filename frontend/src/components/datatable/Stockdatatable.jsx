@@ -162,6 +162,24 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   const [indicators, setIndicators] = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState(null);
+
+  const [showIlliquidWarning, setShowIlliquidWarning] = useState(false);
+  const [dismissedKey, setDismissedKey] = useState(null);
+
+  useEffect(() => {
+    const key = `${exchange}:${symbol}:${interval}`;
+    if (!loading && candles.length < 50 && dismissedKey !== key) {
+      setShowIlliquidWarning(true);
+    } else {
+      setShowIlliquidWarning(false);
+    }
+  }, [candles.length, symbol, exchange, interval, dismissedKey, loading]);
+
+  const handleDismissWarning = () => {
+    const key = `${exchange}:${symbol}:${interval}`;
+    setDismissedKey(key);
+    setShowIlliquidWarning(false);
+  };
   const [showColPanel, setShowColPanel] = useState(false);
   const [visibleCols, setVisibleCols] = useState(() => {
     try {
@@ -396,6 +414,24 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   return (
     <div className="flex flex-col h-full border rounded-xl overflow-hidden relative"
       style={{ background: 'var(--bg-base)', borderColor: 'var(--border-base)' }}>
+
+      {showIlliquidWarning && (
+        <div className="absolute bottom-16 right-4 z-40 bg-slate-900/95 backdrop-blur border border-amber-500/30 text-amber-200 rounded-xl p-3 text-[10px] max-w-[280px] shadow-2xl flex items-start gap-2.5 animate-fade-in pointer-events-auto">
+          <span className="text-amber-400 font-extrabold shrink-0 mt-0.5">⚠️</span>
+          <div className="flex-1">
+            <p className="font-bold text-slate-100">Thinly Traded Stock</p>
+            <p className="mt-0.5 leading-relaxed text-amber-200/90">
+              You might be getting fewer candles because this stock is thinly traded or illiquid. If you face any issues, please feel free to contact us.
+            </p>
+          </div>
+          <button 
+            onClick={handleDismissWarning} 
+            className="text-amber-500 hover:text-amber-300 transition-colors cursor-pointer shrink-0 font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b shrink-0"
