@@ -95,56 +95,126 @@ const computeAllIndicators = (candles) => {
   const smiLine = smiResult.smi.map(nullSafe);
   const smiSignal = smiResult.signal.map(nullSafe);
 
-  // ── Derived deltas ────────────────────────────────────────────────────────
+  // ── Helper to calculate delta and deltaSq ──────────────────────────────
+  const getDeltas = (arr) => {
+    if (!arr || !arr.length) return [null, null];
+    const d1 = arr.map((v, i) =>
+      i > 0 && v !== null && arr[i - 1] !== null ? nullSafe(v - arr[i - 1]) : null
+    );
+    const d2 = d1.map((v, i) =>
+      i > 0 && v !== null && d1[i - 1] !== null ? nullSafe(v - d1[i - 1]) : null
+    );
+    return [d1, d2];
+  };
+
+  const sma20 = smaOf(20);
+  const sma50 = smaOf(50);
+  const sma100 = smaOf(100);
+  const sma200 = smaOf(200);
+
+  const ema20 = emaOf(20);
+  const ema50 = emaOf(50);
+  const ema100 = emaOf(100);
+  const ema200 = emaOf(200);
+
+  const [deltaSma20, deltaSqSma20] = getDeltas(sma20);
+  const [deltaSma50, deltaSqSma50] = getDeltas(sma50);
+  const [deltaSma100, deltaSqSma100] = getDeltas(sma100);
+  const [deltaSma200, deltaSqSma200] = getDeltas(sma200);
+
+  const [deltaEma20, deltaSqEma20] = getDeltas(ema20);
+  const [deltaEma50, deltaSqEma50] = getDeltas(ema50);
+  const [deltaEma100, deltaSqEma100] = getDeltas(ema100);
+  const [deltaEma200, deltaSqEma200] = getDeltas(ema200);
+
+  const [deltaRsi14, deltaSqRsi14] = getDeltas(rsi14);
+
+  const [deltaBbUpper, deltaSqBbUpper] = getDeltas(bbUpper);
+  const [deltaBbMiddle, deltaSqBbMiddle] = getDeltas(bbMiddle);
+  const [deltaBbLower, deltaSqBbLower] = getDeltas(bbLower);
+
+  const [deltaMacdLine, deltaSqMacdLine] = getDeltas(macdLine);
+  const [deltaMacdSignal, deltaSqMacdSignal] = getDeltas(macdSignal);
+  const [deltaMacdHist, deltaSqMacdHist] = getDeltas(macdHist);
+
+  const [deltaADX, deltaSqADX] = getDeltas(adx);
+  const [deltaPlusDI, deltaSqPlusDI] = getDeltas(plusDI);
+  const [deltaMinusDI, deltaSqMinusDI] = getDeltas(minusDI);
+
+  const [deltaMfi14, deltaSqMfi14] = getDeltas(mfi14);
+
+  const [deltaSmiLine, deltaSqSmiLine] = getDeltas(smiLine);
+  const [deltaSmiSignal, deltaSqSmiSignal] = getDeltas(smiSignal);
+
+  // Derived: di and smiDist
   const di = plusDI.map((p, i) =>
     p !== null && minusDI[i] !== null ? nullSafe(p - minusDI[i]) : null
   );
-  const deltaPlusDI = plusDI.map((v, i) =>
-    i > 0 && v !== null && plusDI[i - 1] !== null ? nullSafe(v - plusDI[i - 1]) : null
-  );
-  const deltaMinusDI = minusDI.map((v, i) =>
-    i > 0 && v !== null && minusDI[i - 1] !== null ? nullSafe(v - minusDI[i - 1]) : null
-  );
-  const deltaDI = di.map((v, i) =>
-    i > 0 && v !== null && di[i - 1] !== null ? nullSafe(v - di[i - 1]) : null
-  );
-  const deltaADX = adx.map((v, i) =>
-    i > 0 && v !== null && adx[i - 1] !== null ? nullSafe(v - adx[i - 1]) : null
-  );
-  const deltaSqADX = deltaADX.map((v, i) =>
-    i > 0 && v !== null && deltaADX[i - 1] !== null ? nullSafe(v - deltaADX[i - 1]) : null
-  );
-  const deltaMACD = macdLine.map((v, i) =>
-    i > 0 && v !== null && macdLine[i - 1] !== null ? nullSafe(v - macdLine[i - 1]) : null
-  );
+  const [deltaDI, deltaSqDI] = getDeltas(di);
 
-  const deltaSMI = smiLine.map((v, i) =>
-    i > 0 && v !== null && smiLine[i - 1] !== null ? nullSafe(v - smiLine[i - 1]) : null
-  );
-  const deltaSMISignal = smiSignal.map((v, i) =>
-    i > 0 && v !== null && smiSignal[i - 1] !== null ? nullSafe(v - smiSignal[i - 1]) : null
-  );
   const smiDist = smiLine.map((v, i) =>
     v !== null && smiSignal[i] !== null ? nullSafe(v - smiSignal[i]) : null
   );
-  const deltaSMIDist = smiDist.map((v, i) =>
-    i > 0 && v !== null && smiDist[i - 1] !== null ? nullSafe(v - smiDist[i - 1]) : null
-  );
+  const [deltaSMIDist, deltaSqSMIDist] = getDeltas(smiDist);
+  const deltaSmiDist = deltaSMIDist;
+  const deltaSqSmiDist = deltaSqSMIDist;
 
   return {
-    sma20: smaOf(20), sma50: smaOf(50),
-    sma100: smaOf(100), sma200: smaOf(200),
-    ema20: emaOf(20), ema50: emaOf(50),
-    ema100: emaOf(100), ema200: emaOf(200),
+    sma20, sma50, sma100, sma200,
+    ema20, ema50, ema100, ema200,
     rsi14,
     bbUpper, bbMiddle, bbLower,
     macdLine, macdSignal, macdHist,
     adx, plusDI, minusDI,
     mfi14,
     smiLine, smiSignal,
-    di, deltaPlusDI, deltaMinusDI,
-    deltaDI, deltaADX, deltaSqADX, deltaMACD,
-    deltaSMI, deltaSMISignal, smiDist, deltaSMIDist,
+    di, smiDist,
+
+    // SMA deltas & deltaSqs
+    deltaSma20, deltaSqSma20,
+    deltaSma50, deltaSqSma50,
+    deltaSma100, deltaSqSma100,
+    deltaSma200, deltaSqSma200,
+
+    // EMA deltas & deltaSqs
+    deltaEma20, deltaSqEma20,
+    deltaEma50, deltaSqEma50,
+    deltaEma100, deltaSqEma100,
+    deltaEma200, deltaSqEma200,
+
+    // RSI deltas & deltaSqs
+    deltaRsi14, deltaSqRsi14,
+
+    // Bollinger deltas & deltaSqs
+    deltaBbUpper, deltaSqBbUpper,
+    deltaBbMiddle, deltaSqBbMiddle,
+    deltaBbLower, deltaSqBbLower,
+
+    // MACD deltas & deltaSqs
+    deltaMacdLine, deltaSqMacdLine,
+    deltaMacdSignal, deltaSqMacdSignal,
+    deltaMacdHist, deltaSqMacdHist,
+
+    // ADX / DI deltas & deltaSqs
+    deltaADX, deltaSqADX,
+    deltaPlusDI, deltaSqPlusDI,
+    deltaMinusDI, deltaSqMinusDI,
+    deltaDI, deltaSqDI,
+
+    // MFI deltas & deltaSqs
+    deltaMfi14, deltaSqMfi14,
+
+    // SMI deltas & deltaSqs
+    deltaSmiLine, deltaSqSmiLine,
+    deltaSmiSignal, deltaSqSmiSignal,
+    deltaSmiDist, deltaSqSmiDist,
+
+    // Legacy Aliases for Alert Engine & Backward Compatibility
+    deltaMACD: deltaMacdLine,
+    deltaSMI: deltaSmiLine,
+    deltaSMISignal: deltaSmiSignal,
+    deltaSMIDist: deltaSMIDist,
+    deltaSqSMIDist: deltaSqSmiDist,
   };
 };
 

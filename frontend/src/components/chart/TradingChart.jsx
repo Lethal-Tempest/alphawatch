@@ -33,7 +33,16 @@ const SUB_CHARTS = {
 };
 
 function toTvTime(ts) {
-  return Math.floor(new Date(ts).getTime() / 1000);
+  const d = new Date(ts);
+  return Date.UTC(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate(),
+    d.getHours(),
+    d.getMinutes(),
+    d.getSeconds(),
+    d.getMilliseconds()
+  ) / 1000;
 }
 
 function buildTheme(theme) {

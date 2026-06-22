@@ -56,52 +56,103 @@ const COLUMN_GROUPS = [
   },
   {
     group: 'sma', label: 'SMA', color: 'text-amber-400', cols: [
-      { key: 'sma20',  label: 'SMA 20'  }, { key: 'sma50',  label: 'SMA 50'  },
-      { key: 'sma100', label: 'SMA 100' }, { key: 'sma200', label: 'SMA 200' },
+      { key: 'sma20',        label: 'SMA 20' },
+      { key: 'deltaSma20',   label: 'Δ SMA 20' },
+      { key: 'deltaSqSma20', label: 'Δ² SMA 20' },
+      { key: 'sma50',        label: 'SMA 50' },
+      { key: 'deltaSma50',   label: 'Δ SMA 50' },
+      { key: 'deltaSqSma50', label: 'Δ² SMA 50' },
+      { key: 'sma100',        label: 'SMA 100' },
+      { key: 'deltaSma100',   label: 'Δ SMA 100' },
+      { key: 'deltaSqSma100', label: 'Δ² SMA 100' },
+      { key: 'sma200',        label: 'SMA 200' },
+      { key: 'deltaSma200',   label: 'Δ SMA 200' },
+      { key: 'deltaSqSma200', label: 'Δ² SMA 200' },
     ],
   },
   {
     group: 'ema', label: 'EMA', color: 'text-purple-400', cols: [
-      { key: 'ema20',  label: 'EMA 20'  }, { key: 'ema50',  label: 'EMA 50'  },
-      { key: 'ema100', label: 'EMA 100' }, { key: 'ema200', label: 'EMA 200' },
+      { key: 'ema20',        label: 'EMA 20' },
+      { key: 'deltaEma20',   label: 'Δ EMA 20' },
+      { key: 'deltaSqEma20', label: 'Δ² EMA 20' },
+      { key: 'ema50',        label: 'EMA 50' },
+      { key: 'deltaEma50',   label: 'Δ EMA 50' },
+      { key: 'deltaSqEma50', label: 'Δ² EMA 50' },
+      { key: 'ema100',        label: 'EMA 100' },
+      { key: 'deltaEma100',   label: 'Δ EMA 100' },
+      { key: 'deltaSqEma100', label: 'Δ² EMA 100' },
+      { key: 'ema200',        label: 'EMA 200' },
+      { key: 'deltaEma200',   label: 'Δ EMA 200' },
+      { key: 'deltaSqEma200', label: 'Δ² EMA 200' },
     ],
   },
-  { group: 'rsi',  label: 'RSI',      color: 'text-violet-400', cols: [{ key: 'rsi14', label: 'RSI 14' }] },
   {
-    group: 'bb', label: 'Bollinger', color: 'text-slate-400', cols: [
-      { key: 'bbUpper', label: 'BB Upper' }, { key: 'bbMid', label: 'BB Mid' }, { key: 'bbLower', label: 'BB Lower' },
+    group: 'rsi', label: 'RSI', color: 'text-violet-400', cols: [
+      { key: 'rsi14',        label: 'RSI 14' },
+      { key: 'deltaRsi14',   label: 'Δ RSI 14' },
+      { key: 'deltaSqRsi14', label: 'Δ² RSI 14' },
+    ],
+  },
+  {
+    group: 'bb', label: 'Bollinger Bands', color: 'text-slate-400', cols: [
+      { key: 'bbUpper',        label: 'BB Upper' },
+      { key: 'deltaBbUpper',   label: 'Δ BB Upper' },
+      { key: 'deltaSqBbUpper', label: 'Δ² BB Upper' },
+      { key: 'bbMid',          label: 'BB Mid' },
+      { key: 'deltaBbMid',     label: 'Δ BB Mid' },
+      { key: 'deltaSqBbMid',   label: 'Δ² BB Mid' },
+      { key: 'bbLower',        label: 'BB Lower' },
+      { key: 'deltaBbLower',   label: 'Δ BB Lower' },
+      { key: 'deltaSqBbLower', label: 'Δ² BB Lower' },
     ],
   },
   {
     group: 'macd', label: 'MACD', color: 'text-sky-400', cols: [
-      { key: 'macd', label: 'MACD' }, { key: 'macdSig', label: 'MACD Signal' }, { key: 'macdHist', label: 'MACD Hist' },
+      { key: 'macd',           label: 'MACD' },
+      { key: 'deltaMacd',      label: 'Δ MACD' },
+      { key: 'deltaSqMacd',    label: 'Δ² MACD' },
+      { key: 'macdSig',        label: 'MACD Signal' },
+      { key: 'deltaMacdSig',   label: 'Δ MACD Signal' },
+      { key: 'deltaSqMacdSig', label: 'Δ² MACD Signal' },
+      { key: 'macdHist',        label: 'MACD Hist' },
+      { key: 'deltaMacdHist',   label: 'Δ MACD Hist' },
+      { key: 'deltaSqMacdHist', label: 'Δ² MACD Hist' },
     ],
   },
   {
     group: 'adx', label: 'ADX / DI', color: 'text-yellow-400', cols: [
-      { key: 'adx', label: 'ADX' }, { key: 'plusDI', label: '+DI' }, { key: 'minusDI', label: '-DI' },
+      { key: 'adx',        label: 'ADX' },
+      { key: 'deltaADX',   label: 'Δ ADX' },
+      { key: 'deltaSqADX', label: 'Δ² ADX' },
+      { key: 'plusDI',        label: '+DI' },
+      { key: 'deltaPlusDI',   label: 'Δ +DI' },
+      { key: 'deltaSqPlusDI', label: 'Δ² +DI' },
+      { key: 'minusDI',        label: '-DI' },
+      { key: 'deltaMinusDI',   label: 'Δ -DI' },
+      { key: 'deltaSqMinusDI', label: 'Δ² -DI' },
+      { key: 'di',        label: 'DI (+DI−-DI)' },
+      { key: 'deltaDI',   label: 'Δ DI' },
+      { key: 'deltaSqDI', label: 'Δ² DI' },
     ],
   },
-  { group: 'mfi', label: 'MFI', color: 'text-cyan-400', cols: [{ key: 'mfi', label: 'MFI 14' }] },
+  {
+    group: 'mfi', label: 'MFI', color: 'text-cyan-400', cols: [
+      { key: 'mfi',        label: 'MFI 14' },
+      { key: 'deltaMfi',   label: 'Δ MFI 14' },
+      { key: 'deltaSqMfi', label: 'Δ² MFI 14' },
+    ],
+  },
   {
     group: 'smi', label: 'SMI', color: 'text-emerald-400', cols: [
-      { key: 'smi', label: 'SMI' },
-      { key: 'smiSignal', label: 'SMI Signal' },
-      { key: 'deltaSMI', label: 'Delta SMI' },
-      { key: 'deltaSMISignal', label: 'Delta SMI Signal' },
-      { key: 'smiDist', label: 'SMI Dist' },
-      { key: 'deltaSMIDist', label: 'Delta SMI Dist' },
-    ],
-  },
-  {
-    group: 'custom', label: 'Custom ΔΔ', color: 'text-rose-400', cols: [
-      { key: 'di',           label: 'DI (+DI−-DI)' },
-      { key: 'deltaPlusDI',  label: 'Δ+DI'         },
-      { key: 'deltaMinusDI', label: 'Δ-DI'          },
-      { key: 'deltaDI',      label: 'ΔDI'           },
-      { key: 'deltaADX',     label: 'ΔADX'          },
-      { key: 'deltaSqADX',   label: 'ΔΔ ADX'        },
-      { key: 'deltaMACD',    label: 'ΔMACD'         },
+      { key: 'smi',              label: 'SMI' },
+      { key: 'deltaSMI',         label: 'Δ SMI' },
+      { key: 'deltaSqSmi',       label: 'Δ² SMI' },
+      { key: 'smiSignal',        label: 'SMI Signal' },
+      { key: 'deltaSMISignal',   label: 'Δ SMI Signal' },
+      { key: 'deltaSqSmiSignal', label: 'Δ² SMI Signal' },
+      { key: 'smiDist',          label: 'SMI Dist' },
+      { key: 'deltaSMIDist',     label: 'Δ SMI Dist' },
+      { key: 'deltaSqSmiDist',   label: 'Δ² SMI Dist' },
     ],
   },
 ];
@@ -112,7 +163,7 @@ const DEFAULT_VISIBLE = new Set([
   'bbUpper', 'bbMid', 'bbLower',
   'macd', 'macdSig', 'macdHist',
   'adx', 'plusDI', 'minusDI',
-  'di', 'deltaPlusDI', 'deltaMinusDI', 'deltaDI', 'deltaADX', 'deltaSqADX', 'deltaMACD',
+  'di', 'deltaPlusDI', 'deltaMinusDI', 'deltaDI', 'deltaADX', 'deltaSqADX', 'deltaMacd',
 ]);
 
 const ALL_COL_KEYS = COLUMN_GROUPS.flatMap(g => g.cols.map(c => c.key));
@@ -122,18 +173,36 @@ const COL_META     = Object.fromEntries(
 
 // Map backend indicator key → column key
 const IND_KEY_MAP = {
-  sma20: 'sma20', sma50: 'sma50', sma100: 'sma100', sma200: 'sma200',
-  ema20: 'ema20', ema50: 'ema50', ema100: 'ema100', ema200: 'ema200',
-  rsi14: 'rsi14',
-  bbUpper: 'bbUpper', bbMiddle: 'bbMid', bbLower: 'bbLower',
-  macdLine: 'macd', macdSignal: 'macdSig', macdHist: 'macdHist',
-  adx: 'adx', plusDI: 'plusDI', minusDI: 'minusDI',
-  mfi14: 'mfi',
-  smiLine: 'smi', smiSignal: 'smiSignal',
-  deltaSMI: 'deltaSMI', deltaSMISignal: 'deltaSMISignal',
-  smiDist: 'smiDist', deltaSMIDist: 'deltaSMIDist',
-  di: 'di', deltaPlusDI: 'deltaPlusDI', deltaMinusDI: 'deltaMinusDI',
-  deltaDI: 'deltaDI', deltaADX: 'deltaADX', deltaSqADX: 'deltaSqADX', deltaMACD: 'deltaMACD',
+  sma20: 'sma20', deltaSma20: 'deltaSma20', deltaSqSma20: 'deltaSqSma20',
+  sma50: 'sma50', deltaSma50: 'deltaSma50', deltaSqSma50: 'deltaSqSma50',
+  sma100: 'sma100', deltaSma100: 'deltaSma100', deltaSqSma100: 'deltaSqSma100',
+  sma200: 'sma200', deltaSma200: 'deltaSma200', deltaSqSma200: 'deltaSqSma200',
+
+  ema20: 'ema20', deltaEma20: 'deltaEma20', deltaSqEma20: 'deltaSqEma20',
+  ema50: 'ema50', deltaEma50: 'deltaEma50', deltaSqEma50: 'deltaSqEma50',
+  ema100: 'ema100', deltaEma100: 'deltaEma100', deltaSqEma100: 'deltaSqEma100',
+  ema200: 'ema200', deltaEma200: 'deltaEma200', deltaSqEma200: 'deltaSqEma200',
+
+  rsi14: 'rsi14', deltaRsi14: 'deltaRsi14', deltaSqRsi14: 'deltaSqRsi14',
+
+  bbUpper: 'bbUpper', deltaBbUpper: 'deltaBbUpper', deltaSqBbUpper: 'deltaSqBbUpper',
+  bbMiddle: 'bbMid', deltaBbMiddle: 'deltaBbMid', deltaSqBbMiddle: 'deltaSqBbMid',
+  bbLower: 'bbLower', deltaBbLower: 'deltaBbLower', deltaSqBbLower: 'deltaSqBbLower',
+
+  macdLine: 'macd', deltaMacdLine: 'deltaMacd', deltaSqMacdLine: 'deltaSqMacd',
+  macdSignal: 'macdSig', deltaMacdSignal: 'deltaMacdSig', deltaSqMacdSignal: 'deltaSqMacdSig',
+  macdHist: 'macdHist', deltaMacdHist: 'deltaMacdHist', deltaSqMacdHist: 'deltaSqMacdHist',
+
+  adx: 'adx', deltaADX: 'deltaADX', deltaSqADX: 'deltaSqADX',
+  plusDI: 'plusDI', deltaPlusDI: 'deltaPlusDI', deltaSqPlusDI: 'deltaSqPlusDI',
+  minusDI: 'minusDI', deltaMinusDI: 'deltaMinusDI', deltaSqMinusDI: 'deltaSqMinusDI',
+  di: 'di', deltaDI: 'deltaDI', deltaSqDI: 'deltaSqDI',
+
+  mfi14: 'mfi', deltaMfi14: 'deltaMfi', deltaSqMfi14: 'deltaSqMfi',
+
+  smiLine: 'smi', deltaSmiLine: 'deltaSMI', deltaSqSmiLine: 'deltaSqSmi',
+  smiSignal: 'smiSignal', deltaSmiSignal: 'deltaSMISignal', deltaSqSmiSignal: 'deltaSqSmiSignal',
+  smiDist: 'smiDist', deltaSMIDist: 'deltaSMIDist', deltaSqSmiDist: 'deltaSqSmiDist',
 };
 
 function Th({ children, right }) {

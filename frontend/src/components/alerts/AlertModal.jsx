@@ -2,42 +2,129 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Plus, Trash2, Search, Loader2 } from 'lucide-react';
 import api from '../../services/api';
 
-const INDICATORS = [
-  { key: 'close', label: 'Price (LTP)' },
-  { key: 'open', label: 'Open' },
-  { key: 'high', label: 'High' },
-  { key: 'low', label: 'Low' },
-  { key: 'volume', label: 'Volume' },
-  { key: 'rsi14', label: 'RSI 14' },
-  { key: 'smiLine', label: 'SMI Line' },
-  { key: 'smiSignal', label: 'SMI Signal' },
-  { key: 'deltaSMI', label: 'Delta SMI' },
-  { key: 'deltaSMISignal', label: 'Delta SMI Signal' },
-  { key: 'smiDist', label: 'SMI Dist' },
-  { key: 'deltaSMIDist', label: 'Delta SMI Dist' },
-  { key: 'macdLine', label: 'MACD Line' },
-  { key: 'macdSignal', label: 'MACD Signal' },
-  { key: 'macdHist', label: 'MACD Histogram' },
-  { key: 'adx', label: 'ADX' },
-  { key: 'plusDI', label: '+DI' },
-  { key: 'minusDI', label: '-DI' },
-  { key: 'mfi14', label: 'MFI 14' },
-  { key: 'sma20', label: 'SMA 20' },
-  { key: 'sma50', label: 'SMA 50' },
-  { key: 'sma100', label: 'SMA 100' },
-  { key: 'sma200', label: 'SMA 200' },
-  { key: 'ema20', label: 'EMA 20' },
-  { key: 'ema50', label: 'EMA 50' },
-  { key: 'ema100', label: 'EMA 100' },
-  { key: 'ema200', label: 'EMA 200' },
-  { key: 'di', label: 'DI (+DI - -DI)' },
-  { key: 'deltaPlusDI', label: 'Delta +DI' },
-  { key: 'deltaMinusDI', label: 'Delta -DI' },
-  { key: 'deltaDI', label: 'Delta DI' },
-  { key: 'deltaADX', label: 'Delta ADX' },
-  { key: 'deltaSqADX', label: 'Delta Delta ADX' },
-  { key: 'deltaMACD', label: 'Delta MACD' }
+const INDICATOR_GROUPS = [
+  {
+    label: 'Price & Volume',
+    options: [
+      { key: 'close', label: 'Price (LTP)' },
+      { key: 'open', label: 'Open' },
+      { key: 'high', label: 'High' },
+      { key: 'low', label: 'Low' },
+      { key: 'volume', label: 'Volume' }
+    ]
+  },
+  {
+    label: 'SMA',
+    options: [
+      { key: 'sma20', label: 'SMA 20' },
+      { key: 'deltaSma20', label: 'Delta SMA 20' },
+      { key: 'deltaSqSma20', label: 'Delta Delta SMA 20' },
+      { key: 'sma50', label: 'SMA 50' },
+      { key: 'deltaSma50', label: 'Delta SMA 50' },
+      { key: 'deltaSqSma50', label: 'Delta Delta SMA 50' },
+      { key: 'sma100', label: 'SMA 100' },
+      { key: 'deltaSma100', label: 'Delta SMA 100' },
+      { key: 'deltaSqSma100', label: 'Delta Delta SMA 100' },
+      { key: 'sma200', label: 'SMA 200' },
+      { key: 'deltaSma200', label: 'Delta SMA 200' },
+      { key: 'deltaSqSma200', label: 'Delta Delta SMA 200' }
+    ]
+  },
+  {
+    label: 'EMA',
+    options: [
+      { key: 'ema20', label: 'EMA 20' },
+      { key: 'deltaEma20', label: 'Delta EMA 20' },
+      { key: 'deltaSqEma20', label: 'Delta Delta EMA 20' },
+      { key: 'ema50', label: 'EMA 50' },
+      { key: 'deltaEma50', label: 'Delta EMA 50' },
+      { key: 'deltaSqEma50', label: 'Delta Delta EMA 50' },
+      { key: 'ema100', label: 'EMA 100' },
+      { key: 'deltaEma100', label: 'Delta EMA 100' },
+      { key: 'deltaSqEma100', label: 'Delta Delta EMA 100' },
+      { key: 'ema200', label: 'EMA 200' },
+      { key: 'deltaEma200', label: 'Delta EMA 200' },
+      { key: 'deltaSqEma200', label: 'Delta Delta EMA 200' }
+    ]
+  },
+  {
+    label: 'RSI',
+    options: [
+      { key: 'rsi14', label: 'RSI 14' },
+      { key: 'deltaRsi14', label: 'Delta RSI 14' },
+      { key: 'deltaSqRsi14', label: 'Delta Delta RSI 14' }
+    ]
+  },
+  {
+    label: 'Bollinger Bands',
+    options: [
+      { key: 'bbUpper', label: 'BB Upper' },
+      { key: 'deltaBbUpper', label: 'Delta BB Upper' },
+      { key: 'deltaSqBbUpper', label: 'Delta Delta BB Upper' },
+      { key: 'bbMiddle', label: 'BB Mid' },
+      { key: 'deltaBbMiddle', label: 'Delta BB Mid' },
+      { key: 'deltaSqBbMiddle', label: 'Delta Delta BB Mid' },
+      { key: 'bbLower', label: 'BB Lower' },
+      { key: 'deltaBbLower', label: 'Delta BB Lower' },
+      { key: 'deltaSqBbLower', label: 'Delta Delta BB Lower' }
+    ]
+  },
+  {
+    label: 'MACD',
+    options: [
+      { key: 'macdLine', label: 'MACD Line' },
+      { key: 'deltaMACD', label: 'Delta MACD Line' },
+      { key: 'deltaSqMacdLine', label: 'Delta Delta MACD Line' },
+      { key: 'macdSignal', label: 'MACD Signal' },
+      { key: 'deltaMacdSignal', label: 'Delta MACD Signal' },
+      { key: 'deltaSqMacdSignal', label: 'Delta Delta MACD Signal' },
+      { key: 'macdHist', label: 'MACD Histogram' },
+      { key: 'deltaMacdHist', label: 'Delta MACD Histogram' },
+      { key: 'deltaSqMacdHist', label: 'Delta Delta MACD Histogram' }
+    ]
+  },
+  {
+    label: 'ADX / DI',
+    options: [
+      { key: 'adx', label: 'ADX' },
+      { key: 'deltaADX', label: 'Delta ADX' },
+      { key: 'deltaSqADX', label: 'Delta Delta ADX' },
+      { key: 'plusDI', label: '+DI' },
+      { key: 'deltaPlusDI', label: 'Delta +DI' },
+      { key: 'deltaSqPlusDI', label: 'Delta Delta +DI' },
+      { key: 'minusDI', label: '-DI' },
+      { key: 'deltaMinusDI', label: 'Delta -DI' },
+      { key: 'deltaSqMinusDI', label: 'Delta Delta -DI' },
+      { key: 'di', label: 'DI (+DI - -DI)' },
+      { key: 'deltaDI', label: 'Delta DI' },
+      { key: 'deltaSqDI', label: 'Delta Delta DI' }
+    ]
+  },
+  {
+    label: 'MFI',
+    options: [
+      { key: 'mfi14', label: 'MFI 14' },
+      { key: 'deltaMfi14', label: 'Delta MFI 14' },
+      { key: 'deltaSqMfi14', label: 'Delta Delta MFI 14' }
+    ]
+  },
+  {
+    label: 'SMI',
+    options: [
+      { key: 'smiLine', label: 'SMI Line' },
+      { key: 'deltaSMI', label: 'Delta SMI' },
+      { key: 'deltaSqSmiLine', label: 'Delta Delta SMI Line' },
+      { key: 'smiSignal', label: 'SMI Signal' },
+      { key: 'deltaSMISignal', label: 'Delta SMI Signal' },
+      { key: 'deltaSqSmiSignal', label: 'Delta Delta SMI Signal' },
+      { key: 'smiDist', label: 'SMI Dist' },
+      { key: 'deltaSMIDist', label: 'Delta SMI Dist' },
+      { key: 'deltaSqSMIDist', label: 'Delta Delta SMI Dist' }
+    ]
+  }
 ];
+
+const INDICATORS = INDICATOR_GROUPS.flatMap(g => g.options);
 
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
 const OPERATORS = ['>', '>=', '==', '<=', '<', '!=', 'crossover', 'crossunder'];
@@ -326,7 +413,15 @@ export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
                       onChange={e => handleConditionChange(idx, 'leftIndicator', e.target.value)}
                       className={inputCls} style={inputStyle}
                     >
-                      {INDICATORS.map(ind => <option key={ind.key} value={ind.key}>{ind.label}</option>)}
+                      {INDICATOR_GROUPS.map(g => (
+                        <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                          {g.options.map(ind => (
+                            <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                              {ind.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
                     </select>
                   </div>
 
@@ -376,7 +471,15 @@ export default function AlertModal({ alert: editingAlert, onClose, onSave }) {
                         onChange={e => handleConditionChange(idx, 'rightIndicator', e.target.value)}
                         className={inputCls} style={inputStyle}
                       >
-                        {INDICATORS.map(ind => <option key={ind.key} value={ind.key}>{ind.label}</option>)}
+                        {INDICATOR_GROUPS.map(g => (
+                          <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                            {g.options.map(ind => (
+                              <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                                {ind.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
                       </select>
                     </div>
                   )}
