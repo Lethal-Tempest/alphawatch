@@ -335,7 +335,9 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ interval: updInterval, candle }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle }) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      if (updKey !== targetKey) return;
       if (updInterval !== interval) return;
 
       // Skip zero-volume candles — same rule as the backend aggregator
@@ -369,7 +371,7 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
       socket.off('candle_update', handler);
       clearTimeout(indDebounceRef.current);
     };
-  }, [socket, interval, refreshIndicators]);
+  }, [socket, exchange, symbol, interval, refreshIndicators]);
 
   // ── getVal: map column key → indicator value at candle index i ─────────────
   // `i` is the index into the `candles` array (oldest→newest).

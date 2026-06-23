@@ -20,7 +20,11 @@ const path = require('path');
 
 // Shape: candleBuffer[key][interval] = [ { timestamp, open, high, low, close, volume }, ... ]
 const candleBuffer  = {};
-const historyLoaded = new Set();
+const historyLoaded = new Map();
+
+function getTodayDateString() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
 
 const CACHE_FILE = path.join(__dirname, '../cache/candleBuffer.json');
 
@@ -33,7 +37,7 @@ function saveCacheToDisk() {
     }
     const dataToSave = {
       candleBuffer,
-      historyLoaded: Array.from(historyLoaded)
+      historyLoaded: Object.fromEntries(historyLoaded)
     };
     fs.writeFileSync(CACHE_FILE, JSON.stringify(dataToSave), 'utf8');
   } catch (err) {
@@ -51,8 +55,14 @@ function loadCacheFromDisk() {
       if (parsed.candleBuffer) {
         Object.assign(candleBuffer, parsed.candleBuffer);
       }
-      if (Array.isArray(parsed.historyLoaded)) {
-        parsed.historyLoaded.forEach(k => historyLoaded.add(k));
+      if (parsed.historyLoaded) {
+        if (Array.isArray(parsed.historyLoaded)) {
+          parsed.historyLoaded.forEach(k => historyLoaded.set(k, ''));
+        } else if (typeof parsed.historyLoaded === 'object') {
+          for (const [k, v] of Object.entries(parsed.historyLoaded)) {
+            historyLoaded.set(k, v);
+          }
+        }
       }
       console.log(`💾 Loaded cache for ${historyLoaded.size} historical indicators keys.`);
     }
@@ -175,7 +185,11 @@ exports.updateCandleBuffer = (key, tick) => {
 // Read helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-exports.hasHistory = (key, interval) => historyLoaded.has(`${key}:${interval}`);
+exports.hasHistory = (key, interval) => {
+  const mapKey = `${key}:${interval}`;
+  const lastFetched = historyLoaded.get(mapKey);
+  return lastFetched === getTodayDateString();
+};
 
 /**
  * Return the candle array for a given key + interval (excluding internal fields).
@@ -193,7 +207,7 @@ const activeFetchPromises = new Map();
 
 exports.getOrFetchHistory = async (key, exchange, symbol, interval, fetchFn) => {
   const mapKey = `${key}:${interval}`;
-  if (historyLoaded.has(mapKey)) {
+  if (exports.hasHistory(key, interval)) {
     return;
   }
   if (activeFetchPromises.has(mapKey)) {
@@ -221,7 +235,7 @@ exports.getOrFetchHistory = async (key, exchange, symbol, interval, fetchFn) => 
 exports.setHistoricalCandles = (key, interval, candles) => {
   if (!candleBuffer[key]) candleBuffer[key] = {};
 
-  historyLoaded.add(`${key}:${interval}`);
+  historyLoaded.set(`${key}:${interval}`, getTodayDateString());
 
   // Drop zero-volume historical candles on ingestion
   const validCandles = candles.filter(c => (+c.volume || 0) > 0);

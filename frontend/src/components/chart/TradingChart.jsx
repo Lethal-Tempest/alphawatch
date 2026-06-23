@@ -559,7 +559,10 @@ export default function TradingChart({
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ interval: updInterval, candle }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle }) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      if (updKey !== targetKey) return;
+
       setCandles(prev => {
         if (updInterval !== interval) return prev;
         const updated = [...prev];
@@ -581,7 +584,9 @@ export default function TradingChart({
       series.current.volume?.update({ time: tv.time, value: +candle.volume, color: candle.close >= candle.open ? '#22c55e22' : '#ef444422' });
     };
 
-    const allHandler = ({ interval: updInterval, candle }) => {
+    const allHandler = ({ key: updKey, interval: updInterval, candle }) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      if (updKey !== targetKey) return;
       if (updInterval === interval) return;
       onCandlesChange?.(updInterval, null, candle);
     };
@@ -592,7 +597,7 @@ export default function TradingChart({
       socket.off('candle_update', handler);
       socket.off('candle_update', allHandler);
     };
-  }, [socket, interval, exchange, symbol]);
+  }, [socket, interval, exchange, symbol, onCandlesChange]);
 
   // ── 7. Synchronize crosshair & timescales + display legend ──────────────────
   useEffect(() => {
