@@ -14,7 +14,7 @@ exports.search = async (req, res, next) => {
     res.json({
       success: true,
       suggestions: suggestions.map(i => ({
-        symbol: i.exch_seg === 'NSE' ? i.symbol.replace('-EQ', '') : i.symbol,
+        symbol: i.exch_seg === 'NSE' ? i.symbol.replace(/-EQ$|-BE$|-SM$|-ST$/, '') : i.symbol,
         shortname: i.name || i.symbol,
         exchange: i.exch_seg,
         token: i.token,

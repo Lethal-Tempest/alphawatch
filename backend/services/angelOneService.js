@@ -86,9 +86,14 @@ exports.syncScripMaster = async () => {
     return;
   }
 
-  // Keep only NSE equity (-EQ suffix) and BSE equity instruments
+  // Keep only NSE equity (EQ, BE, SM, ST suffixes) and BSE equity instruments
   angelScripMaster = res.data.filter(item =>
-    (item.exch_seg === 'NSE' && item.symbol.endsWith('-EQ')) ||
+    (item.exch_seg === 'NSE' && (
+      item.symbol.endsWith('-EQ') ||
+      item.symbol.endsWith('-BE') ||
+      item.symbol.endsWith('-SM') ||
+      item.symbol.endsWith('-ST')
+    )) ||
     (item.exch_seg === 'BSE' && (item.instrumenttype === 'AMXEQ' || item.instrumenttype === ''))
   );
 
@@ -98,7 +103,7 @@ exports.syncScripMaster = async () => {
   for (const item of angelScripMaster) {
     const symbolKey = item.symbol.toUpperCase();
     if (item.exch_seg === 'NSE') {
-      const cleanSymbol = symbolKey.replace('-EQ', '');
+      const cleanSymbol = symbolKey.replace(/-EQ$|-BE$|-SM$|-ST$/, '');
       nseScripMap.set(cleanSymbol, item);
     } else if (item.exch_seg === 'BSE') {
       bseScripMap.set(symbolKey, item);
