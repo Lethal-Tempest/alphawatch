@@ -226,6 +226,15 @@ exports.searchScrips = (term) => {
     .slice(0, 8);
 };
 
+// Helper to snap timestamp for downsampling, aligned with market hours (09:15 IST / 03:45 UTC)
+function snapTimestamp(tsMs, intervalMs) {
+  const intervalMin = intervalMs / (60 * 1000);
+  const offsetMs = (225 % intervalMin) * 60 * 1000;
+  const shiftedTs = tsMs - offsetMs;
+  const snappedShifted = Math.floor(shiftedTs / intervalMs) * intervalMs;
+  return new Date(snappedShifted + offsetMs).toISOString();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Historical Candle Fetcher & Downsampler
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,7 +250,7 @@ exports.fetchHistoricalCandles = async (exchange, symbol, interval, priority = '
     case '5m': apiInterval = 'FIVE_MINUTE'; break;
     case '10m': apiInterval = 'FIVE_MINUTE'; downsampleFactor = 2; break;
     case '15m': apiInterval = 'FIFTEEN_MINUTE'; break;
-    case '30m': apiInterval = 'FIFTEEN_MINUTE'; downsampleFactor = 2; break;
+    case '30m': apiInterval = 'THIRTY_MINUTE'; break;
     case '1h': apiInterval = 'ONE_HOUR'; break;
     case '1d': apiInterval = 'ONE_DAY'; break;
     default: throw new Error(`Invalid interval: ${interval}`);
@@ -287,21 +296,31 @@ exports.fetchHistoricalCandles = async (exchange, symbol, interval, priority = '
     volume: parseInt(c[5], 10),
   }));
 
-  // Dynamic Downsampling Engine (handles both 10m and 30m)
+  // Dynamic Downsampling Engine (handles any downsampled intervals like 10m)
   if (downsampleFactor > 1) {
-    const downsampled = [];
-    for (let i = 0; i < parsedCandles.length; i += downsampleFactor) {
-      if (i + downsampleFactor - 1 < parsedCandles.length) {
-        const chunk = parsedCandles.slice(i, i + downsampleFactor);
-        downsampled.push({
-          timestamp: chunk[0].timestamp,
-          open: chunk[0].open,
-          high: Math.max(...chunk.map(c => c.high)),
-          low: Math.min(...chunk.map(c => c.low)),
-          close: chunk[chunk.length - 1].close,
-          volume: chunk.reduce((sum, c) => sum + c.volume, 0),
-        });
+    const targetIntervalMs = 10 * 60 * 1000; // 10 minutes for 10m timeframe
+    const groups = {};
+    for (const c of parsedCandles) {
+      const tsMs = new Date(c.timestamp).getTime();
+      const snapped = snapTimestamp(tsMs, targetIntervalMs);
+      if (!groups[snapped]) {
+        groups[snapped] = [];
       }
+      groups[snapped].push(c);
+    }
+
+    const downsampled = [];
+    const sortedKeys = Object.keys(groups).sort((a, b) => new Date(a) - new Date(b));
+    for (const snapped of sortedKeys) {
+      const chunk = groups[snapped];
+      downsampled.push({
+        timestamp: snapped,
+        open: chunk[0].open,
+        high: Math.max(...chunk.map(c => c.high)),
+        low: Math.min(...chunk.map(c => c.low)),
+        close: chunk[chunk.length - 1].close,
+        volume: chunk.reduce((sum, c) => sum + c.volume, 0),
+      });
     }
     parsedCandles = downsampled;
   }

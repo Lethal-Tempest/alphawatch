@@ -45,29 +45,15 @@ function saveCacheToDisk() {
   }
 }
 
-// Helper to load cache from disk
+// Helper to load cache from disk - modified to clear cache on cold start
 function loadCacheFromDisk() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
-      console.log('💾 Loading candleBuffer cache from disk...');
-      const raw = fs.readFileSync(CACHE_FILE, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (parsed.candleBuffer) {
-        Object.assign(candleBuffer, parsed.candleBuffer);
-      }
-      if (parsed.historyLoaded) {
-        if (Array.isArray(parsed.historyLoaded)) {
-          parsed.historyLoaded.forEach(k => historyLoaded.set(k, ''));
-        } else if (typeof parsed.historyLoaded === 'object') {
-          for (const [k, v] of Object.entries(parsed.historyLoaded)) {
-            historyLoaded.set(k, v);
-          }
-        }
-      }
-      console.log(`💾 Loaded cache for ${historyLoaded.size} historical indicators keys.`);
+      console.log('🗑️ Cold start: Clearing stale cache on disk to refresh data...');
+      fs.unlinkSync(CACHE_FILE);
     }
   } catch (err) {
-    console.error('Failed to load candleBuffer cache from disk:', err.message);
+    console.error('Failed to clear candleBuffer cache on disk:', err.message);
   }
 }
 
@@ -120,9 +106,15 @@ const MAX_CANDLES = 1000;
 
 /**
  * Snap a Unix timestamp (ms) down to the start of its interval bucket.
+ * Aligned with Indian market open time (09:15 IST / 03:45 UTC = 225 minutes from UTC midnight).
  */
 function snapTimestamp(tsMs, intervalMs) {
-  return new Date(Math.floor(tsMs / intervalMs) * intervalMs).toISOString();
+  const intervalMin = intervalMs / (60 * 1000);
+  const offsetMs = (225 % intervalMin) * 60 * 1000;
+
+  const shiftedTs = tsMs - offsetMs;
+  const snappedShifted = Math.floor(shiftedTs / intervalMs) * intervalMs;
+  return new Date(snappedShifted + offsetMs).toISOString();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
