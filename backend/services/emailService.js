@@ -17,7 +17,7 @@ async function getTransporter() {
   const pass = process.env.SMTP_PASS;
 
   if (host && user && pass) {
-    console.log('✉️  Using custom SMTP configuration for email alerts');
+    console.log('📬 [Email Pipeline] Using custom SMTP configuration for email alerts');
     transporter = nodemailer.createTransport({
       host,
       port: parseInt(port, 10) || 587,
@@ -25,10 +25,10 @@ async function getTransporter() {
       auth: { user, pass }
     });
   } else {
-    console.log('✉️  No SMTP configuration found in environment. Creating runtime Ethereal Email test account...');
+    console.log('📬 [Email Pipeline] No SMTP configuration found in environment. Creating Ethereal Email test account...');
     try {
       const testAccount = await nodemailer.createTestAccount();
-      console.log(`✉️  Ethereal Test Account created — User: ${testAccount.user}`);
+      console.log(`📬 [Email Pipeline] Ethereal Test Account created — User: ${testAccount.user}`);
       transporter = nodemailer.createTransport({
         host: testAccount.smtp.host,
         port: testAccount.smtp.port,
@@ -55,7 +55,9 @@ async function getTransporter() {
 
 exports.sendAlertEmail = async (toEmail, alert, symbol, exchange, ltp) => {
   try {
+    console.log(`\n📬 [Email Pipeline] Initializing send logic for alert "${alert.name}"...`);
     const client = await getTransporter();
+    console.log(`📬 [Email Pipeline] Transporter retrieved. Preparing payload for ${exchange}:${symbol}...`);
     const from = process.env.SMTP_FROM || '"AlphaWatch Alerts" <alerts@alphawatch.com>';
     const subject = `🔔 Alert Triggered: ${alert.name} (${exchange}:${symbol})`;
 
@@ -95,6 +97,7 @@ exports.sendAlertEmail = async (toEmail, alert, symbol, exchange, ltp) => {
       </div>
     `;
 
+    console.log(`📬 [Email Pipeline] Sending alert email to ${toEmail}...`);
     const info = await client.sendMail({
       from,
       to: toEmail,
@@ -102,10 +105,10 @@ exports.sendAlertEmail = async (toEmail, alert, symbol, exchange, ltp) => {
       html
     });
 
-    console.log(`✉️  Alert email sent successfully to ${toEmail} [MessageID: ${info.messageId}]`);
+    console.log(`📬 [Email Pipeline] Email sent successfully! MessageID: ${info.messageId}`);
     const previewUrl = nodemailer.getTestMessageUrl(info);
     if (previewUrl) {
-      console.log(`✉️  [Ethereal Email Sandbox] View triggered email: ${previewUrl}`);
+      console.log(`   └─ Ethereal Sandbox Link: ${previewUrl}\n`);
     }
   } catch (err) {
     console.error('[EmailService] Failed to send email alert:', err.message);
@@ -114,10 +117,11 @@ exports.sendAlertEmail = async (toEmail, alert, symbol, exchange, ltp) => {
 
 exports.sendCombinedAlertEmail = async (toEmail, alert, triggeredStocks) => {
   try {
-    const client = await getTransporter();
-    const from = process.env.SMTP_FROM || '"AlphaWatch Alerts" <alerts@alphawatch.com>';
-    
     const stockLabels = triggeredStocks.map(s => `${s.exchange}:${s.symbol}`).join(', ');
+    console.log(`\n📬 [Email Pipeline] Initializing combined send logic for alert "${alert.name}"...`);
+    const client = await getTransporter();
+    console.log(`📬 [Email Pipeline] Transporter retrieved. Preparing combined payload for [${stockLabels}]...`);
+    const from = process.env.SMTP_FROM || '"AlphaWatch Alerts" <alerts@alphawatch.com>';
     const subject = `🔔 Alert Triggered: ${alert.name} for ${stockLabels}`;
 
     let stocksHtml = '';
@@ -171,6 +175,7 @@ exports.sendCombinedAlertEmail = async (toEmail, alert, triggeredStocks) => {
       </div>
     `;
 
+    console.log(`📬 [Email Pipeline] Sending combined alert email to ${toEmail}...`);
     const info = await client.sendMail({
       from,
       to: toEmail,
@@ -178,10 +183,10 @@ exports.sendCombinedAlertEmail = async (toEmail, alert, triggeredStocks) => {
       html
     });
 
-    console.log(`✉️  Combined alert email sent successfully to ${toEmail} for [${stockLabels}] [MessageID: ${info.messageId}]`);
+    console.log(`📬 [Email Pipeline] Combined email sent successfully! MessageID: ${info.messageId}`);
     const previewUrl = nodemailer.getTestMessageUrl(info);
     if (previewUrl) {
-      console.log(`✉️  [Ethereal Email Sandbox] View triggered email: ${previewUrl}`);
+      console.log(`   └─ Ethereal Sandbox Link: ${previewUrl}\n`);
     }
   } catch (err) {
     console.error('[EmailService] Failed to send combined email alert:', err.message);

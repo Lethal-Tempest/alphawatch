@@ -114,18 +114,42 @@ export default function AlertsPanel({ symbol, exchange, socket, onClearFilter })
             <div className="flex-1 min-w-0">
               <p className="font-extrabold uppercase tracking-wide text-amber-300">Alert Triggered</p>
               <p className="font-black mt-0.5 text-slate-100">{t.alertName}</p>
-              <p className="text-[10px] font-mono text-amber-400 mt-1">Symbol: {t.exchange}:{t.symbol} · LTP: ₹{Number(t.ltp).toFixed(2)}</p>
               
-              <div className="mt-2 space-y-1 border-t border-amber-800/50 pt-1.5">
-                {t.conditions?.map((c, i) => {
-                  const rhs = c.rightType === 'value' ? Number(c.rightValue).toFixed(2) : c.rightIndicator;
-                  return (
-                    <p key={i} className="text-[10px] text-amber-200/90 leading-tight">
-                      • {c.leftIndicator} ({c.timeframe}): {Number(c.leftActual).toFixed(2)} {c.operator} {c.rightType === 'value' ? rhs : `${rhs} (${Number(c.rightActual).toFixed(2)})`} ✓
-                    </p>
-                  );
-                })}
-              </div>
+              {t.stocks ? (
+                <div className="mt-2 space-y-2.5 max-h-60 overflow-y-auto pr-1">
+                  {t.stocks.map((stock, idx) => (
+                    <div key={idx} className="border-t border-amber-800/40 pt-2 first:border-0 first:pt-0">
+                      <p className="text-[10px] font-mono text-amber-400 font-bold">
+                        {stock.exchange}:{stock.symbol} · LTP: ₹{Number(stock.ltp).toFixed(2)}
+                      </p>
+                      <div className="mt-1 space-y-0.5 pl-2">
+                        {stock.conditions?.map((c, i) => {
+                          const rhs = c.rightType === 'value' ? Number(c.rightValue).toFixed(2) : c.rightIndicator;
+                          return (
+                            <p key={i} className="text-[9px] text-amber-200/90 leading-tight">
+                              • {c.leftIndicator} ({c.timeframe}): {Number(c.leftActual).toFixed(2)} {c.operator} {c.rightType === 'value' ? rhs : `${rhs} (${Number(c.rightActual).toFixed(2)})`} ✓
+                            </p>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <p className="text-[10px] font-mono text-amber-400 mt-1">Symbol: {t.exchange}:{t.symbol} · LTP: ₹{Number(t.ltp).toFixed(2)}</p>
+                  <div className="mt-2 space-y-1 border-t border-amber-800/50 pt-1.5">
+                    {t.conditions?.map((c, i) => {
+                      const rhs = c.rightType === 'value' ? Number(c.rightValue).toFixed(2) : c.rightIndicator;
+                      return (
+                        <p key={i} className="text-[10px] text-amber-200/90 leading-tight">
+                          • {c.leftIndicator} ({c.timeframe}): {Number(c.leftActual).toFixed(2)} {c.operator} {c.rightType === 'value' ? rhs : `${rhs} (${Number(c.rightActual).toFixed(2)})`} ✓
+                        </p>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
             <button onClick={() => dismissToast(t.id)} className="cursor-pointer text-amber-500 hover:text-amber-200 p-0.5 rounded hover:bg-amber-900/30 transition-colors">
               <X size={13} />

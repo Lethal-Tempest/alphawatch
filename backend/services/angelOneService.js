@@ -132,7 +132,7 @@ async function processQueue() {
   while (requestQueue.length > 0) {
     const { fn, resolve, reject } = requestQueue.shift();
     try {
-      console.log(`[Queue] Processing request. Remaining in queue: ${requestQueue.length}`);
+      // console.log(`[Queue] Processing request. Remaining in queue: ${requestQueue.length}`);
       const res = await fn();
       resolve(res);
     } catch (err) {
@@ -148,10 +148,10 @@ function enqueueRequest(fn, priority = 'low') {
   return new Promise((resolve, reject) => {
     if (priority === 'high') {
       requestQueue.unshift({ fn, resolve, reject });
-      console.log(`[Queue] High-priority request unshifted. Size: ${requestQueue.length}`);
+      // console.log(`[Queue] High-priority request unshifted. Size: ${requestQueue.length}`);
     } else {
       requestQueue.push({ fn, resolve, reject });
-      console.log(`[Queue] Low-priority request pushed. Size: ${requestQueue.length}`);
+      // console.log(`[Queue] Low-priority request pushed. Size: ${requestQueue.length}`);
     }
     processQueue();
   });
@@ -191,7 +191,7 @@ exports.fetchQuotesBatch = async (items, priority = 'low') => {
         if (!exchangeTokens[ex]) exchangeTokens[ex] = [];
         exchangeTokens[ex].push(String(item.token));
       }
-      console.log('📦 Batch Quote Chunk Request:', JSON.stringify(exchangeTokens));
+      // console.log('📦 Batch Quote Chunk Request:', JSON.stringify(exchangeTokens));
       const body = { mode: ANGEL.QUOTE_MODE, exchangeTokens };
       try {
         const res = await axios.post(ANGEL.QUOTE_URL, body, { headers: buildAuthHeaders(jwt) });

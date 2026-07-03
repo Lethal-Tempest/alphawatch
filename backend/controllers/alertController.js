@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 const Alert = require('../models/Alert');
 const polling = require('../services/pollingLoop');
+const alertEngine = require('../services/alertEngine');
 
 exports.getAlerts = async (req, res, next) => {
   try {
@@ -37,8 +38,9 @@ exports.createAlert = async (req, res, next) => {
         polling.subscribe(`${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`);
       }
     }
-
     res.status(201).json({ success: true, alert });
+    // Immediately evaluate alert in background
+    alertEngine.evaluateAlertImmediately(alert._id);
   } catch (error) { next(error); }
 };
 
@@ -75,8 +77,11 @@ exports.updateAlert = async (req, res, next) => {
         polling.subscribe(`${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`);
       }
     }
-
     res.json({ success: true, alert });
+    // Immediately evaluate alert in background if active
+    if (alert.status === 'active') {
+      alertEngine.evaluateAlertImmediately(alert._id);
+    }
   } catch (error) { next(error); }
 };
 
@@ -98,5 +103,9 @@ exports.dismissAlert = async (req, res, next) => {
     );
     if (!alert) return res.status(404).json({ error: 'Alert not found.' });
     res.json({ success: true, alert });
+    // Immediately evaluate alert in background if reactivated
+    if (alert.status === 'active') {
+      alertEngine.evaluateAlertImmediately(alert._id);
+    }
   } catch (error) { next(error); }
 };

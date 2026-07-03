@@ -28,6 +28,7 @@ const liveMarketState = {};
 const lastBroadcastCandle = {};
 
 let ioInstance;
+let isPolling = false;
 
 exports.init = (io) => { ioInstance = io; };
 
@@ -65,34 +66,39 @@ function candleChanged(prev, next) {
 // Main polling cycle - called every 5 seconds by server.js
 // -----------------------------------------------------------------------------
 exports.runPollingCycle = async () => {
-  const activeAlerts = await alertEngine.getActiveAlerts();
-  const alertKeys = await alertEngine.getActiveAlertKeys(activeAlerts);
-  const allKeys = new Set([...activeSubscriptions, ...alertKeys]);
-  if (allKeys.size === 0) return;
-
-  // NSE/BSE: 09:15 - 15:30 IST (server must run with TZ=Asia/Kolkata)
-  const now     = new Date();
-  const timeInt = now.getHours() * 100 + now.getMinutes();
-  const isMarketOpen = timeInt >= 915 && timeInt <= 1530;
-
-  // Resolve scrip tokens for all keys
-  const items = [];
-  const keyToScrip = {};
-
-  for (const key of allKeys) {
-    const [exchange, symbol] = key.split(':');
-    const scripMatch = angelOne.resolveToken(exchange, symbol);
-    if (!scripMatch) {
-      console.warn(`[Polling] No token found for ${key} - skipping`);
-      continue;
-    }
-    items.push({ exchange, token: scripMatch.token, symbol });
-    keyToScrip[key] = scripMatch;
+  if (isPolling) {
+    console.log('[Polling] Preempting runPollingCycle: previous cycle still active.');
+    return;
   }
-
-  if (items.length === 0) return;
-
+  isPolling = true;
   try {
+    const activeAlerts = await alertEngine.getActiveAlerts();
+    const alertKeys = await alertEngine.getActiveAlertKeys(activeAlerts);
+    const allKeys = new Set([...activeSubscriptions, ...alertKeys]);
+    if (allKeys.size === 0) return;
+
+    // NSE/BSE: 09:15 - 15:30 IST (server must run with TZ=Asia/Kolkata)
+    const now     = new Date();
+    const timeInt = now.getHours() * 100 + now.getMinutes();
+    const isMarketOpen = timeInt >= 915 && timeInt <= 1530;
+
+    // Resolve scrip tokens for all keys
+    const items = [];
+    const keyToScrip = {};
+
+    for (const key of allKeys) {
+      const [exchange, symbol] = key.split(':');
+      const scripMatch = angelOne.resolveToken(exchange, symbol);
+      if (!scripMatch) {
+        console.warn(`[Polling] No token found for ${key} - skipping`);
+        continue;
+      }
+      items.push({ exchange, token: scripMatch.token, symbol });
+      keyToScrip[key] = scripMatch;
+    }
+
+    if (items.length === 0) return;
+
     // Fetch all quotes in batch
     const fetchedQuotes = await angelOne.fetchQuotesBatch(items);
     if (!fetchedQuotes || fetchedQuotes.length === 0) {
@@ -177,5 +183,7 @@ exports.runPollingCycle = async () => {
 
   } catch (err) {
     console.error(`[Polling] Batch polling cycle failed:`, err.message);
+  } finally {
+    isPolling = false;
   }
 };
