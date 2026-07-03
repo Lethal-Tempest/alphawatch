@@ -38,6 +38,7 @@ app.use('/api/search',      require('./routes/search'));
 app.use('/api/stock',       require('./routes/market'));
 app.use('/api/historical',  require('./routes/historical'));
 app.use('/api/indicators',  require('./routes/indicators')); // ← NEW: server-side indicators
+app.use('/api/backtest',    require('./routes/backtest'));
 
 app.use(errorHandler);
 

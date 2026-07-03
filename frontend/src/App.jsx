@@ -10,6 +10,7 @@ import AuthModal       from './components/auth/AuthModal';
 import LiveTickerBar   from './components/ticker/Livetickerbar';
 import StockDataTable  from './components/datatable/Stockdatatable';
 import WatchlistDashboard from './components/watchlist/WatchlistDashboard';
+import BacktestDashboard from './components/backtest/BacktestDashboard';
 import { useSocket }   from './services/useSocket';
 import { useTheme }    from './contexts/ThemeContext';
 import api             from './services/api';
@@ -147,6 +148,7 @@ export default function App() {
   const [watchlists, setWatchlists]       = useState([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState('');
   const [newWatchlistName, setNewWatchlistName] = useState('');
+  const [activeMainTab, setActiveMainTab]       = useState('watchlist');
 
   // Alerts sidebar state
   const [showAlertsSidebar, setShowAlertsSidebar] = useState(false);
@@ -422,7 +424,7 @@ export default function App() {
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-xl"
                        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
                     
-                    {/* Select watchlist dropdown */}
+                    {/* Select watchlist dropdown & Switcher */}
                     <div className="flex items-center gap-3">
                       <div className="relative shrink-0 min-w-[180px]">
                         <select value={selectedWatchlistId} onChange={e => setSelectedWatchlistId(e.target.value)}
@@ -445,6 +447,28 @@ export default function App() {
                           <Trash2 size={13} />
                         </button>
                       )}
+
+                      {/* Segmented main tab switcher */}
+                      <div className="flex items-center gap-1 p-0.5 rounded-lg border ml-2" style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}>
+                        <button
+                          type="button"
+                          onClick={() => setActiveMainTab('watchlist')}
+                          className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                            activeMainTab === 'watchlist' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-indigo-400'
+                          }`}
+                        >
+                          Watchlist
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveMainTab('backtest')}
+                          className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                            activeMainTab === 'backtest' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-indigo-400'
+                          }`}
+                        >
+                          Backtest
+                        </button>
+                      </div>
                     </div>
 
                     {/* Create watchlist inline form */}
@@ -459,17 +483,24 @@ export default function App() {
                   </div>
                 )}
 
-                {/* View Switcher: Watchlist OR Chart OR Depth Table */}
+                {/* View Switcher: Watchlist Dashboard OR Backtesting Dashboard OR Active stock details workspace */}
                 {!activeView ? (
-                  <WatchlistDashboard
-                    watchlists={watchlists}
-                    selectedId={selectedWatchlistId}
-                    socket={socket}
-                    onOpenChart={handleOpenChart}
-                    onOpenTable={handleOpenTable}
-                    onOpenAlert={handleOpenAlert}
-                    onRemoveStock={handleRemoveFromWatchlist}
-                  />
+                  activeMainTab === 'watchlist' ? (
+                    <WatchlistDashboard
+                      watchlists={watchlists}
+                      selectedId={selectedWatchlistId}
+                      socket={socket}
+                      onOpenChart={handleOpenChart}
+                      onOpenTable={handleOpenTable}
+                      onOpenAlert={handleOpenAlert}
+                      onRemoveStock={handleRemoveFromWatchlist}
+                    />
+                  ) : (
+                    <BacktestDashboard
+                      watchlists={watchlists}
+                      selectedId={selectedWatchlistId}
+                    />
+                  )
                 ) : (
                   <div className="flex flex-col gap-6 w-full animate-fade-in">
                     {/* View Switcher Header */}
