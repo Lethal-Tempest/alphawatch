@@ -136,6 +136,127 @@ const INDICATOR_GROUPS = [
   }
 ];
 
+const precedence = {
+  '+': 1,
+  '-': 1,
+  '*': 2,
+  '/': 2
+};
+
+const isOperator = (t) => t === '+' || t === '-' || t === '*' || t === '/';
+
+function infixToPostfix(tokens) {
+  const outputQueue = [];
+  const operatorStack = [];
+
+  for (const token of tokens) {
+    if (typeof token === 'number') {
+      outputQueue.push(token);
+    } else if (isOperator(token)) {
+      while (
+        operatorStack.length > 0 &&
+        isOperator(operatorStack[operatorStack.length - 1]) &&
+        precedence[operatorStack[operatorStack.length - 1]] >= precedence[token]
+      ) {
+        outputQueue.push(operatorStack.pop());
+      }
+      operatorStack.push(token);
+    } else if (token === '(') {
+      operatorStack.push(token);
+    } else if (token === ')') {
+      while (operatorStack.length > 0 && operatorStack[operatorStack.length - 1] !== '(') {
+        outputQueue.push(operatorStack.pop());
+      }
+      operatorStack.pop();
+    }
+  }
+
+  while (operatorStack.length > 0) {
+    const op = operatorStack.pop();
+    if (op !== '(' && op !== ')') {
+      outputQueue.push(op);
+    }
+  }
+
+  return outputQueue;
+}
+
+function evaluatePostfix(postfixTokens) {
+  const stack = [];
+
+  for (const token of postfixTokens) {
+    if (typeof token === 'number') {
+      stack.push(token);
+    } else if (isOperator(token)) {
+      if (stack.length < 2) {
+        return 0;
+      }
+      const b = stack.pop();
+      const a = stack.pop();
+      let result = 0;
+      switch (token) {
+        case '+': result = a + b; break;
+        case '-': result = a - b; break;
+        case '*': result = a * b; break;
+        case '/': result = b !== 0 ? a / b : 0; break;
+      }
+      stack.push(result);
+    }
+  }
+
+  return stack.length === 1 ? stack[0] : 0;
+}
+
+function convertLegacyScoreConditions(legacy) {
+  if (!Array.isArray(legacy) || legacy.length === 0) {
+    return [
+      {
+        type: 'operand',
+        valueType: 'indicator',
+        timeframe: '5m',
+        indicator: 'close'
+      }
+    ];
+  }
+
+  if (legacy[0] && legacy[0].type) {
+    return legacy;
+  }
+
+  const tokens = [];
+  legacy.forEach((c, idx) => {
+    tokens.push({ type: 'parenthesis', valueStr: '(' });
+    tokens.push({
+      type: 'operand',
+      valueType: c.leftType || 'value',
+      timeframe: c.timeframe || '5m',
+      value: c.leftType === 'value' ? parseFloat(c.leftValue || 0) : undefined,
+      indicator: c.leftType === 'indicator' ? c.leftIndicator || 'close' : undefined
+    });
+    tokens.push({ type: 'operator', valueStr: '-' });
+    tokens.push({
+      type: 'operand',
+      valueType: c.rightType || 'value',
+      timeframe: c.timeframe || '5m',
+      value: c.rightType === 'value' ? parseFloat(c.rightValue || 0) : undefined,
+      indicator: c.rightType === 'indicator' ? c.rightIndicator || 'close' : undefined
+    });
+    tokens.push({ type: 'parenthesis', valueStr: ')' });
+    tokens.push({ type: 'operator', valueStr: '*' });
+    tokens.push({
+      type: 'operand',
+      valueType: 'value',
+      value: isNaN(parseFloat(c.multiplier)) ? 1 : parseFloat(c.multiplier)
+    });
+
+    if (idx < legacy.length - 1) {
+      tokens.push({ type: 'operator', valueStr: '+' });
+    }
+  });
+
+  return tokens;
+}
+
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
 
 export default function WatchlistDashboard({
@@ -165,10 +286,15 @@ export default function WatchlistDashboard({
   // Sync local conditions when the active watchlist changes
   useEffect(() => {
     if (current?.scoreConditions && current.scoreConditions.length > 0) {
-      setLocalConditions(current.scoreConditions);
+      setLocalConditions(convertLegacyScoreConditions(current.scoreConditions));
     } else {
       setLocalConditions([
-        { timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }
+        {
+          type: 'operand',
+          valueType: 'indicator',
+          timeframe: '5m',
+          indicator: 'close'
+        }
       ]);
     }
   }, [current?._id, current?.scoreConditions]);
@@ -209,11 +335,14 @@ export default function WatchlistDashboard({
         setLoading(false);
 
         // Determine all unique timeframes referenced in the formula to progressively fetch indicators
-        const conditions = current.scoreConditions && current.scoreConditions.length > 0
-          ? current.scoreConditions
-          : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
-
-        const neededTimeframes = Array.from(new Set(conditions.map((c) => c.timeframe)));
+        const conditions = convertLegacyScoreConditions(current.scoreConditions);
+        const neededTimeframes = Array.from(
+          new Set(
+            conditions
+              .filter((c) => c.type === 'operand' && c.valueType === 'indicator' && c.timeframe)
+              .map((c) => c.timeframe)
+          )
+        );
 
         // Reset indicators state
         setIndicators({});
@@ -304,10 +433,14 @@ export default function WatchlistDashboard({
   useEffect(() => {
     if (!socket) return;
 
-    const conditions = current?.scoreConditions && current.scoreConditions.length > 0
-      ? current.scoreConditions
-      : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
-    const neededTimeframes = Array.from(new Set(conditions.map((c) => c.timeframe)));
+    const conditions = convertLegacyScoreConditions(current?.scoreConditions);
+    const neededTimeframes = Array.from(
+      new Set(
+        conditions
+          .filter((c) => c.type === 'operand' && c.valueType === 'indicator' && c.timeframe)
+          .map((c) => c.timeframe)
+      )
+    );
 
     const handleCandleUpdate = async (data) => {
       // data: { key, interval, candle }
@@ -374,30 +507,24 @@ export default function WatchlistDashboard({
   const sortedStocks = useMemo(() => {
     if (!current?.stocks) return [];
 
-    const conditions = current.scoreConditions && current.scoreConditions.length > 0
-      ? current.scoreConditions
-      : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
+    const conditions = convertLegacyScoreConditions(current.scoreConditions);
 
     const stocksWithScore = current.stocks.map((stock) => {
       const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
       
-      let score = 0;
-      for (const cond of conditions) {
-        const leftVal = getIndicatorValue(
-          key,
-          cond.timeframe,
-          cond.leftType,
-          cond.leftType === 'value' ? cond.leftValue : cond.leftIndicator
-        );
-        const rightVal = getIndicatorValue(
-          key,
-          cond.timeframe,
-          cond.rightType,
-          cond.rightType === 'value' ? cond.rightValue : cond.rightIndicator
-        );
-        const mult = cond.multiplier ?? 1;
-        score += (leftVal - rightVal) * mult;
-      }
+      const resolvedTokens = conditions.map((c) => {
+        if (c.type === 'operand') {
+          if (c.valueType === 'value') {
+            return parseFloat(c.value ?? 0);
+          } else {
+            return getIndicatorValue(key, c.timeframe, 'indicator', c.indicator);
+          }
+        }
+        return c.valueStr;
+      });
+
+      const postfix = infixToPostfix(resolvedTokens);
+      const score = evaluatePostfix(postfix);
 
       return {
         ...stock,
@@ -409,23 +536,35 @@ export default function WatchlistDashboard({
   }, [current?.stocks, current?.scoreConditions, quotes, indicators]);
 
   // ── Formula management handlers ──
-  const handleAddCondition = () => {
-    setLocalConditions([
-      ...localConditions,
-      { timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }
-    ]);
+  const handleAddToken = (token) => {
+    setLocalConditions([...localConditions, token]);
   };
 
   const handleRemoveCondition = (index) => {
-    if (localConditions.length === 1) return;
     setLocalConditions(localConditions.filter((_, i) => i !== index));
+  };
+
+  const handleClearFormula = () => {
+    setLocalConditions([]);
   };
 
   const handleConditionChange = (index, field, val) => {
     const updated = [...localConditions];
-    updated[index][field] = val;
+    updated[index] = { ...updated[index], [field]: val };
     setLocalConditions(updated);
   };
+
+  const isBalanced = useMemo(() => {
+    let balance = 0;
+    for (const t of localConditions) {
+      if (t.type === 'parenthesis') {
+        if (t.valueStr === '(') balance++;
+        else if (t.valueStr === ')') balance--;
+        if (balance < 0) return false;
+      }
+    }
+    return balance === 0;
+  }, [localConditions]);
 
   const handleSaveScoreConditions = async () => {
     try {
@@ -499,7 +638,7 @@ export default function WatchlistDashboard({
 
       {/* ── Score Settings Collapsible Panel ── */}
       {showScoreSettings && (
-        <div className="border rounded-2xl p-4 space-y-4 animate-fade-in"
+        <div className="border rounded-2xl p-5 space-y-4 animate-fade-in"
              style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b" style={{ borderColor: 'var(--border-base)' }}>
             <div>
@@ -507,154 +646,186 @@ export default function WatchlistDashboard({
                 Configure Custom Score Formula
               </h3>
               <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Define score statements. Stocks in the main table will be sorted based on their calculated score.
+                Construct complex calculations using BODMAS structure. Click elements to configure, and use the quick-add buttons.
               </p>
             </div>
             <button
               type="button"
-              onClick={handleAddCondition}
-              className="flex items-center gap-1 text-[9px] font-black uppercase px-2.5 py-1.5 bg-indigo-600 text-white rounded-lg cursor-pointer hover:bg-indigo-500 transition-colors shadow-md"
+              onClick={handleClearFormula}
+              className="flex items-center gap-1 text-[9px] font-black uppercase px-2.5 py-1.5 border border-rose-500/30 text-rose-400 bg-rose-500/5 rounded-lg cursor-pointer hover:bg-rose-500/10 transition-colors"
             >
-              <Plus size={10} /> Add Statement
+              Clear Formula
             </button>
           </div>
 
-          <div className="space-y-3">
-            {localConditions.map((cond, idx) => (
-              <div key={idx} className="flex flex-wrap items-center gap-2 border-b last:border-0 pb-3 last:pb-0" style={{ borderColor: 'var(--border-base)' }}>
-                {/* Timeframe Select */}
-                <div className="w-[75px]">
-                  <select
-                    value={cond.timeframe}
-                    onChange={e => handleConditionChange(idx, 'timeframe', e.target.value)}
-                    className={selectCls} style={selectStyle}
-                  >
-                    {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-                  </select>
-                </div>
-
-                {/* Left Term */}
-                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
-                  <select
-                    value={cond.leftType}
-                    onChange={e => {
-                      handleConditionChange(idx, 'leftType', e.target.value);
-                      if (e.target.value === 'value') {
-                        handleConditionChange(idx, 'leftValue', 0);
-                      } else {
-                        handleConditionChange(idx, 'leftIndicator', 'close');
-                      }
-                    }}
-                    className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    <option value="value">Value</option>
-                    <option value="indicator">Indicator</option>
-                  </select>
-
-                  {cond.leftType === 'value' ? (
-                    <input
-                      type="number" step="any" required placeholder="0.0"
-                      value={cond.leftValue ?? ''}
-                      onChange={e => handleConditionChange(idx, 'leftValue', e.target.value)}
-                      className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
-                      style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
-                    />
-                  ) : (
+          {/* Formula Display Area */}
+          <div className="flex flex-wrap items-center gap-2 p-4 min-h-[70px] rounded-xl border border-dashed"
+               style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
+            {localConditions.map((cond, idx) => {
+              if (cond.type === 'parenthesis') {
+                return (
+                  <span key={idx} className="flex items-center gap-1 bg-amber-500/10 text-amber-400 border border-amber-500/30 px-2.5 py-1.5 rounded-lg text-sm font-black select-none">
                     <select
-                      value={cond.leftIndicator}
-                      onChange={e => handleConditionChange(idx, 'leftIndicator', e.target.value)}
-                      className={selectGroupCls}
+                      value={cond.valueStr}
+                      onChange={e => handleConditionChange(idx, 'valueStr', e.target.value)}
+                      className="bg-transparent border-0 font-bold focus:ring-0 p-0 text-center text-sm cursor-pointer select-none focus:outline-none"
                       style={{ color: 'var(--text-primary)' }}
                     >
-                      {INDICATOR_GROUPS.map(g => (
-                        <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
-                          {g.options.map(ind => (
-                            <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
-                              {ind.label}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
+                      <option value="(" className="bg-slate-900 text-slate-100">(</option>
+                      <option value=")" className="bg-slate-900 text-slate-100">)</option>
                     </select>
-                  )}
-                </div>
-
-                <span className="text-slate-400 font-bold px-1">—</span>
-
-                {/* Right Term */}
-                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
-                  <select
-                    value={cond.rightType}
-                    onChange={e => {
-                      handleConditionChange(idx, 'rightType', e.target.value);
-                      if (e.target.value === 'value') {
-                        handleConditionChange(idx, 'rightValue', 0);
-                      } else {
-                        handleConditionChange(idx, 'rightIndicator', 'close');
-                      }
-                    }}
-                    className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    <option value="value">Value</option>
-                    <option value="indicator">Indicator</option>
-                  </select>
-
-                  {cond.rightType === 'value' ? (
-                    <input
-                      type="number" step="any" required placeholder="0.0"
-                      value={cond.rightValue ?? ''}
-                      onChange={e => handleConditionChange(idx, 'rightValue', e.target.value)}
-                      className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
-                      style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
-                    />
-                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCondition(idx)}
+                      className="text-amber-500 hover:text-rose-400 cursor-pointer ml-1"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                );
+              }
+              if (cond.type === 'operator') {
+                return (
+                  <span key={idx} className="flex items-center gap-1 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 px-2.5 py-1.5 rounded-lg text-sm font-black select-none">
                     <select
-                      value={cond.rightIndicator}
-                      onChange={e => handleConditionChange(idx, 'rightIndicator', e.target.value)}
-                      className={selectGroupCls}
+                      value={cond.valueStr}
+                      onChange={e => handleConditionChange(idx, 'valueStr', e.target.value)}
+                      className="bg-transparent border-0 font-bold focus:ring-0 p-0 text-center text-sm cursor-pointer select-none focus:outline-none"
                       style={{ color: 'var(--text-primary)' }}
                     >
-                      {INDICATOR_GROUPS.map(g => (
-                        <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
-                          {g.options.map(ind => (
-                            <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
-                              {ind.label}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
+                      <option value="+" className="bg-slate-900 text-slate-100">+</option>
+                      <option value="-" className="bg-slate-900 text-slate-100">-</option>
+                      <option value="*" className="bg-slate-900 text-slate-100">×</option>
+                      <option value="/" className="bg-slate-900 text-slate-100">÷</option>
                     </select>
-                  )}
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCondition(idx)}
+                      className="text-indigo-500 hover:text-rose-400 cursor-pointer ml-1"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                );
+              }
+              if (cond.type === 'operand') {
+                if (cond.valueType === 'value') {
+                  return (
+                    <span key={idx} className="flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg text-xs font-semibold select-none">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold mr-1">Value:</span>
+                      <input
+                        type="number" step="any" required
+                        value={cond.value ?? 0}
+                        onChange={e => handleConditionChange(idx, 'value', parseFloat(e.target.value) || 0)}
+                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-right text-emerald-300 focus:outline-none focus:border-indigo-500"
+                        style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCondition(idx)}
+                        className="text-emerald-500 hover:text-rose-400 cursor-pointer ml-1"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  );
+                } else {
+                  return (
+                    <span key={idx} className="flex items-center gap-1.5 bg-sky-500/10 text-sky-400 border border-sky-500/30 px-2.5 py-1.5 rounded-lg text-xs font-semibold select-none">
+                      <span className="text-[10px] text-slate-400 uppercase font-bold">Ind:</span>
+                      <select
+                        value={cond.timeframe || '5m'}
+                        onChange={e => handleConditionChange(idx, 'timeframe', e.target.value)}
+                        className="bg-transparent border-0 p-0 text-sky-300 font-bold focus:ring-0 text-xs cursor-pointer focus:outline-none"
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        {TIMEFRAMES.map(tf => <option key={tf} value={tf} className="bg-slate-900 text-slate-100">{tf}</option>)}
+                      </select>
+                      <select
+                        value={cond.indicator || 'close'}
+                        onChange={e => handleConditionChange(idx, 'indicator', e.target.value)}
+                        className="bg-transparent border-0 p-0 text-sky-400 font-bold focus:ring-0 text-xs cursor-pointer max-w-[120px] focus:outline-none"
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        {INDICATOR_GROUPS.map(g => (
+                          <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                            {g.options.map(ind => (
+                              <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                                {ind.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCondition(idx)}
+                        className="text-sky-500 hover:text-rose-400 cursor-pointer ml-1"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  );
+                }
+              }
+              return null;
+            })}
+            {localConditions.length === 0 && (
+              <span className="text-xs text-slate-500 italic">Formula is empty. Use the quick-add buttons below.</span>
+            )}
+          </div>
 
-                <span className="text-slate-400 font-bold px-1">✕</span>
+          {/* Validation Banner */}
+          {!isBalanced && (
+            <div className="text-rose-400 text-[10px] font-semibold flex items-center gap-1 select-none animate-pulse">
+              ⚠️ Warning: Unbalanced parentheses. Please verify your bracket pairs.
+            </div>
+          )}
 
-                {/* Multiplier */}
-                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
-                  <span className="text-[10px] uppercase font-black" style={{ color: 'var(--text-muted)' }}>Multiplier:</span>
-                  <input
-                    type="number" step="any" required placeholder="1.0"
-                    value={cond.multiplier ?? ''}
-                    onChange={e => handleConditionChange(idx, 'multiplier', e.target.value)}
-                    className="w-16 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
-                    style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
-                  />
-                </div>
+          {/* Elements Quick Toolbar */}
+          <div className="flex flex-wrap items-center gap-2 pt-2 border-t" style={{ borderColor: 'var(--border-base)' }}>
+            <span className="text-[10px] text-slate-400 uppercase font-black mr-2 select-none">Add Element:</span>
 
-                {/* Actions */}
-                <button
-                  type="button"
-                  onClick={() => handleRemoveCondition(idx)}
-                  disabled={localConditions.length === 1}
-                  className="p-1.5 rounded-lg border hover:text-rose-400 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors ml-auto sm:ml-0"
-                  style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}
-                  title="Remove Statement"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
+            <button
+              type="button"
+              onClick={() => handleAddToken({ type: 'operand', valueType: 'indicator', timeframe: '5m', indicator: 'close' })}
+              className="flex items-center gap-1 text-[10px] font-bold px-3 py-1.5 border border-sky-500/30 text-sky-400 bg-sky-500/5 hover:bg-sky-500/10 rounded-lg cursor-pointer transition-colors"
+            >
+              <Plus size={10} /> Technical Indicator
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleAddToken({ type: 'operand', valueType: 'value', value: 1 })}
+              className="flex items-center gap-1 text-[10px] font-bold px-3 py-1.5 border border-emerald-500/30 text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10 rounded-lg cursor-pointer transition-colors"
+            >
+              <Plus size={10} /> Constant Value
+            </button>
+
+            <div className="h-4 w-px bg-slate-700 mx-1"></div>
+
+            {['+', '-', '*', '/'].map((op) => (
+              <button
+                key={op}
+                type="button"
+                onClick={() => handleAddToken({ type: 'operator', valueStr: op })}
+                className="w-8 h-8 flex items-center justify-center text-xs font-bold border border-indigo-500/30 text-indigo-400 bg-indigo-500/5 hover:bg-indigo-500/10 rounded-lg cursor-pointer transition-colors"
+              >
+                {op === '*' ? '×' : op === '/' ? '÷' : op}
+              </button>
+            ))}
+
+            <div className="h-4 w-px bg-slate-700 mx-1"></div>
+
+            {['(', ')'].map((paren) => (
+              <button
+                key={paren}
+                type="button"
+                onClick={() => handleAddToken({ type: 'parenthesis', valueStr: paren })}
+                className="w-8 h-8 flex items-center justify-center text-xs font-bold border border-amber-500/30 text-amber-400 bg-amber-500/5 hover:bg-amber-500/10 rounded-lg cursor-pointer transition-colors"
+              >
+                {paren}
+              </button>
             ))}
           </div>
 

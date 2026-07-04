@@ -44,55 +44,13 @@ const watchlistSchema = new mongoose.Schema({
     default: false,
   },
   scoreConditions: {
-    type: [
-      {
-        timeframe: {
-          type: String,
-          enum: ['1m', '5m', '10m', '15m', '30m', '1h', '1d'],
-          default: '5m'
-        },
-        leftType: {
-          type: String,
-          enum: ['value', 'indicator'],
-          default: 'value'
-        },
-        leftValue: {
-          type: Number,
-          default: 0
-        },
-        leftIndicator: {
-          type: String,
-          default: 'close'
-        },
-        rightType: {
-          type: String,
-          enum: ['value', 'indicator'],
-          default: 'value'
-        },
-        rightValue: {
-          type: Number,
-          default: 0
-        },
-        rightIndicator: {
-          type: String,
-          default: 'close'
-        },
-        multiplier: {
-          type: Number,
-          default: 1
-        }
-      }
-    ],
+    type: Array,
     default: () => [
       {
+        type: 'operand',
+        valueType: 'indicator',
         timeframe: '5m',
-        leftType: 'value',
-        leftValue: 0,
-        leftIndicator: 'close',
-        rightType: 'value',
-        rightValue: 0,
-        rightIndicator: 'close',
-        multiplier: 1
+        indicator: 'close'
       }
     ]
   },

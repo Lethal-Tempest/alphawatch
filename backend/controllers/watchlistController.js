@@ -55,16 +55,30 @@ exports.updateScoreConditions = async (req, res, next) => {
       return res.status(400).json({ error: 'scoreConditions must be an array.' });
     }
     
-    const cleaned = scoreConditions.map(c => ({
-      timeframe: c.timeframe || '5m',
-      leftType: c.leftType || 'value',
-      leftValue: c.leftType === 'value' ? parseFloat(c.leftValue || 0) : undefined,
-      leftIndicator: c.leftType === 'indicator' ? c.leftIndicator || 'close' : undefined,
-      rightType: c.rightType || 'value',
-      rightValue: c.rightType === 'value' ? parseFloat(c.rightValue || 0) : undefined,
-      rightIndicator: c.rightType === 'indicator' ? c.rightIndicator || 'close' : undefined,
-      multiplier: isNaN(parseFloat(c.multiplier)) ? 1 : parseFloat(c.multiplier)
-    }));
+    const cleaned = scoreConditions.map(c => {
+      if (!c || typeof c !== 'object') return null;
+      if (c.type === 'operand') {
+        const valueType = c.valueType === 'value' ? 'value' : 'indicator';
+        return {
+          type: 'operand',
+          valueType,
+          value: valueType === 'value' ? parseFloat(c.value ?? 0) : undefined,
+          indicator: valueType === 'indicator' ? String(c.indicator || 'close') : undefined,
+          timeframe: valueType === 'indicator' ? String(c.timeframe || '5m') : undefined
+        };
+      } else if (c.type === 'operator') {
+        return {
+          type: 'operator',
+          valueStr: ['+', '-', '*', '/'].includes(c.valueStr) ? c.valueStr : '+'
+        };
+      } else if (c.type === 'parenthesis') {
+        return {
+          type: 'parenthesis',
+          valueStr: ['(', ')'].includes(c.valueStr) ? c.valueStr : '('
+        };
+      }
+      return null;
+    }).filter(Boolean);
 
     const wl = await Watchlist.findOneAndUpdate(
       { _id: req.params.id, userId: req.user.id },
