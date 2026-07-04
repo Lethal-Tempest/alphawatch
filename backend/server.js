@@ -42,6 +42,10 @@ app.use('/api/backtest',    require('./routes/backtest'));
 
 app.use(errorHandler);
 
+// Health Check Endpoint (keeps server alive on Render)
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Socket.io Connection Handler
 // ─────────────────────────────────────────────────────────────────────────────

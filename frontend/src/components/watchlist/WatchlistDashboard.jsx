@@ -1,19 +1,142 @@
 // frontend/src/components/watchlist/WatchlistDashboard.jsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  TrendingUp, TrendingDown, Minus, BarChart2, Table2, Bell, Trash2, Loader2, RefreshCw
+  TrendingUp, TrendingDown, Minus, BarChart2, Table2, Bell, Trash2, Loader2, RefreshCw, Settings, Plus, X
 } from 'lucide-react';
 import api, { fetchIndicators, invalidateIndicatorCache } from '../../services/api';
 
 const fmt2 = (n) => (n != null && !isNaN(n)) ? Number(n).toFixed(2) : '—';
-const fmtI = (n) => (n != null && !isNaN(n)) ? Number(n).toFixed(1) : '—';
 const fmtV = (n) => {
   if (n == null || isNaN(n)) return '—';
   if (n >= 1_00_00_000) return (n / 1_00_00_000).toFixed(1) + ' Cr';
-  if (n >= 1_00_000)    return (n / 1_00_00_000).toFixed(1) + ' L';
+  if (n >= 1_00_000)    return (n / 1_00_000).toFixed(1) + ' L';
   if (n >= 1_000)       return (n / 1_000).toFixed(0) + 'K';
   return String(n);
 };
+
+const INDICATOR_GROUPS = [
+  {
+    label: 'Price & Volume',
+    options: [
+      { key: 'close', label: 'Price (LTP)' },
+      { key: 'open', label: 'Open' },
+      { key: 'high', label: 'High' },
+      { key: 'low', label: 'Low' },
+      { key: 'volume', label: 'Volume' }
+    ]
+  },
+  {
+    label: 'SMA',
+    options: [
+      { key: 'sma20', label: 'SMA 20' },
+      { key: 'deltaSma20', label: 'Delta SMA 20' },
+      { key: 'deltaSqSma20', label: 'Delta Delta SMA 20' },
+      { key: 'sma50', label: 'SMA 50' },
+      { key: 'deltaSma50', label: 'Delta SMA 50' },
+      { key: 'deltaSqSma50', label: 'Delta Delta SMA 50' },
+      { key: 'sma100', label: 'SMA 100' },
+      { key: 'deltaSma100', label: 'Delta SMA 100' },
+      { key: 'deltaSqSma100', label: 'Delta Delta SMA 100' },
+      { key: 'sma200', label: 'SMA 200' },
+      { key: 'deltaSma200', label: 'Delta SMA 200' },
+      { key: 'deltaSqSma200', label: 'Delta Delta SMA 200' }
+    ]
+  },
+  {
+    label: 'EMA',
+    options: [
+      { key: 'ema20', label: 'EMA 20' },
+      { key: 'deltaEma20', label: 'Delta EMA 20' },
+      { key: 'deltaSqEma20', label: 'Delta Delta EMA 20' },
+      { key: 'ema50', label: 'EMA 50' },
+      { key: 'deltaEma50', label: 'Delta EMA 50' },
+      { key: 'deltaSqEma50', label: 'Delta Delta EMA 50' },
+      { key: 'ema100', label: 'EMA 100' },
+      { key: 'deltaEma100', label: 'Delta EMA 100' },
+      { key: 'deltaSqEma100', label: 'Delta Delta EMA 100' },
+      { key: 'ema200', label: 'EMA 200' },
+      { key: 'deltaEma200', label: 'Delta EMA 200' },
+      { key: 'deltaSqEma200', label: 'Delta Delta EMA 200' }
+    ]
+  },
+  {
+    label: 'RSI',
+    options: [
+      { key: 'rsi14', label: 'RSI 14' },
+      { key: 'deltaRsi14', label: 'Delta RSI 14' },
+      { key: 'deltaSqRsi14', label: 'Delta Delta RSI 14' }
+    ]
+  },
+  {
+    label: 'Bollinger Bands',
+    options: [
+      { key: 'bbUpper', label: 'BB Upper' },
+      { key: 'deltaBbUpper', label: 'Delta BB Upper' },
+      { key: 'deltaSqBbUpper', label: 'Delta Delta BB Upper' },
+      { key: 'bbMiddle', label: 'BB Mid' },
+      { key: 'deltaBbMiddle', label: 'Delta BB Mid' },
+      { key: 'deltaSqBbMiddle', label: 'Delta Delta BB Mid' },
+      { key: 'bbLower', label: 'BB Lower' },
+      { key: 'deltaBbLower', label: 'Delta BB Lower' },
+      { key: 'deltaSqBbLower', label: 'Delta Delta BB Lower' }
+    ]
+  },
+  {
+    label: 'MACD',
+    options: [
+      { key: 'macdLine', label: 'MACD Line' },
+      { key: 'deltaMACD', label: 'Delta MACD Line' },
+      { key: 'deltaSqMacdLine', label: 'Delta Delta MACD Line' },
+      { key: 'macdSignal', label: 'MACD Signal' },
+      { key: 'deltaMacdSignal', label: 'Delta MACD Signal' },
+      { key: 'deltaSqMacdSignal', label: 'Delta Delta MACD Signal' },
+      { key: 'macdHist', label: 'MACD Histogram' },
+      { key: 'deltaMacdHist', label: 'Delta MACD Histogram' },
+      { key: 'deltaSqMacdHist', label: 'Delta Delta MACD Histogram' }
+    ]
+  },
+  {
+    label: 'ADX / DI',
+    options: [
+      { key: 'adx', label: 'ADX' },
+      { key: 'deltaADX', label: 'Delta ADX' },
+      { key: 'deltaSqADX', label: 'Delta Delta ADX' },
+      { key: 'plusDI', label: '+DI' },
+      { key: 'deltaPlusDI', label: 'Delta +DI' },
+      { key: 'deltaSqPlusDI', label: 'Delta Delta +DI' },
+      { key: 'minusDI', label: '-DI' },
+      { key: 'deltaMinusDI', label: 'Delta -DI' },
+      { key: 'deltaSqMinusDI', label: 'Delta Delta -DI' },
+      { key: 'di', label: 'DI (+DI - -DI)' },
+      { key: 'deltaDI', label: 'Delta DI' },
+      { key: 'deltaSqDI', label: 'Delta Delta DI' }
+    ]
+  },
+  {
+    label: 'MFI',
+    options: [
+      { key: 'mfi14', label: 'MFI 14' },
+      { key: 'deltaMfi14', label: 'Delta MFI 14' },
+      { key: 'deltaSqMfi14', label: 'Delta Delta MFI 14' }
+    ]
+  },
+  {
+    label: 'SMI',
+    options: [
+      { key: 'smiLine', label: 'SMI Line' },
+      { key: 'deltaSMI', label: 'Delta SMI' },
+      { key: 'deltaSqSmiLine', label: 'Delta Delta SMI Line' },
+      { key: 'smiSignal', label: 'SMI Signal' },
+      { key: 'deltaSMISignal', label: 'Delta SMI Signal' },
+      { key: 'deltaSqSmiSignal', label: 'Delta Delta SMI Signal' },
+      { key: 'smiDist', label: 'SMI Dist' },
+      { key: 'deltaSMIDist', label: 'Delta SMI Dist' },
+      { key: 'deltaSqSMIDist', label: 'Delta Delta SMI Dist' }
+    ]
+  }
+];
+
+const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
 
 export default function WatchlistDashboard({
   watchlists,
@@ -23,18 +146,34 @@ export default function WatchlistDashboard({
   onOpenTable,
   onOpenAlert,
   onRemoveStock,
+  onWatchlistsChange,
 }) {
-  const [timeframe, setTimeframe] = useState('5m');
   const [quotes, setQuotes] = useState({});
   const [indicators, setIndicators] = useState({});
   const [loading, setLoading] = useState(false);
   const [flashes, setFlashes] = useState({});
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  
+  // Score settings and local copy for modifications
+  const [showScoreSettings, setShowScoreSettings] = useState(false);
+  const [localConditions, setLocalConditions] = useState([]);
 
   const prevLtps = useRef({});
   const flashTimers = useRef({});
   const current = watchlists.find((w) => w._id === selectedId);
 
-  // ── Fetch batch quotes and indicators when watchlist or timeframe changes ──
+  // Sync local conditions when the active watchlist changes
+  useEffect(() => {
+    if (current?.scoreConditions && current.scoreConditions.length > 0) {
+      setLocalConditions(current.scoreConditions);
+    } else {
+      setLocalConditions([
+        { timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }
+      ]);
+    }
+  }, [current?._id, current?.scoreConditions]);
+
+  // ── Fetch batch quotes and indicators when watchlist, score conditions or refresh changes ──
   useEffect(() => {
     if (!current?.stocks || current.stocks.length === 0) {
       setQuotes({});
@@ -69,26 +208,37 @@ export default function WatchlistDashboard({
         // Set loading to false early so user sees prices instantly in msec!
         setLoading(false);
 
-        // Reset indicators state to loading representation before starting fetches
+        // Determine all unique timeframes referenced in the formula to progressively fetch indicators
+        const conditions = current.scoreConditions && current.scoreConditions.length > 0
+          ? current.scoreConditions
+          : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
+
+        const neededTimeframes = Array.from(new Set(conditions.map((c) => c.timeframe)));
+
+        // Reset indicators state
         setIndicators({});
 
-        // 2. Fetch indicators for all stocks progressively
+        // 2. Fetch indicators for all stocks progressively across all needed timeframes
         current.stocks.forEach(async (s) => {
           const key = `${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`;
-          try {
-            const indData = await fetchIndicators(s.exchange, s.symbol, timeframe);
-            if (cancelled) return;
-            const last = (arr) => (arr && arr.length > 0) ? arr[arr.length - 1] : null;
-            setIndicators((prev) => ({
-              ...prev,
-              [key]: {
-                sma20: last(indData.sma20),
-                ema20: last(indData.ema20),
-                rsi14: last(indData.rsi14),
-              },
-            }));
-          } catch (err) {
-            console.error(`Failed to fetch indicators progressively for ${key}:`, err);
+          
+          for (const tf of neededTimeframes) {
+            try {
+              const indData = await fetchIndicators(s.exchange, s.symbol, tf);
+              if (cancelled) return;
+              
+              const latestValues = {};
+              for (const [indKey, arr] of Object.entries(indData)) {
+                latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
+              }
+              
+              setIndicators((prev) => ({
+                ...prev,
+                [`${key}:${tf}`]: latestValues,
+              }));
+            } catch (err) {
+              console.error(`Failed to fetch indicators progressively for ${key}:${tf}:`, err);
+            }
           }
         });
       } catch (err) {
@@ -102,7 +252,7 @@ export default function WatchlistDashboard({
     return () => {
       cancelled = true;
     };
-  }, [current?.stocks, timeframe]);
+  }, [current?.stocks, current?.scoreConditions, refreshTrigger]);
 
   // ── Handle real-time socket tick updates ──
   useEffect(() => {
@@ -154,26 +304,32 @@ export default function WatchlistDashboard({
   useEffect(() => {
     if (!socket) return;
 
+    const conditions = current?.scoreConditions && current.scoreConditions.length > 0
+      ? current.scoreConditions
+      : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
+    const neededTimeframes = Array.from(new Set(conditions.map((c) => c.timeframe)));
+
     const handleCandleUpdate = async (data) => {
       // data: { key, interval, candle }
-      if (data.interval !== timeframe) return;
+      if (!neededTimeframes.includes(data.interval)) return;
       const [exchange, symbol] = data.key.split(':');
+      const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       
       try {
-        invalidateIndicatorCache(exchange, symbol, timeframe);
-        const indData = await fetchIndicators(exchange, symbol, timeframe);
-        const last = (arr) => (arr && arr.length > 0) ? arr[arr.length - 1] : null;
+        invalidateIndicatorCache(exchange, symbol, data.interval);
+        const indData = await fetchIndicators(exchange, symbol, data.interval);
+        
+        const latestValues = {};
+        for (const [indKey, arr] of Object.entries(indData)) {
+          latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
+        }
 
         setIndicators((prev) => ({
           ...prev,
-          [data.key]: {
-            sma20: last(indData.sma20),
-            ema20: last(indData.ema20),
-            rsi14: last(indData.rsi14),
-          },
+          [`${key}:${data.interval}`]: latestValues,
         }));
       } catch (err) {
-        console.error(`Failed to refresh indicator on candle update for ${data.key}:`, err);
+        console.error(`Failed to refresh indicator on candle update for ${data.key}:${data.interval}:`, err);
       }
     };
 
@@ -181,7 +337,109 @@ export default function WatchlistDashboard({
     return () => {
       socket.off('candle_update', handleCandleUpdate);
     };
-  }, [socket, timeframe]);
+  }, [socket, current?.scoreConditions]);
+
+  // ── Helper to retrieve indicator/value ──
+  const getIndicatorValue = (stockKey, tf, type, valOrIndicator) => {
+    if (type === 'value') {
+      return parseFloat(valOrIndicator || 0);
+    }
+    const indicatorName = valOrIndicator;
+    const quote = quotes[stockKey];
+    
+    if (indicatorName === 'close' || indicatorName === 'ltp') {
+      return quote?.ltp ?? 0;
+    }
+    if (indicatorName === 'open') {
+      return quote?.open ?? 0;
+    }
+    if (indicatorName === 'high') {
+      return quote?.high ?? 0;
+    }
+    if (indicatorName === 'low') {
+      return quote?.low ?? 0;
+    }
+    if (indicatorName === 'volume') {
+      return quote?.volume ?? 0;
+    }
+
+    const indObj = indicators[`${stockKey}:${tf}`];
+    if (!indObj) return 0;
+    
+    const value = indObj[indicatorName];
+    return value != null && !isNaN(value) ? value : 0;
+  };
+
+  // ── Sort stocks by score descending ──
+  const sortedStocks = useMemo(() => {
+    if (!current?.stocks) return [];
+
+    const conditions = current.scoreConditions && current.scoreConditions.length > 0
+      ? current.scoreConditions
+      : [{ timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }];
+
+    const stocksWithScore = current.stocks.map((stock) => {
+      const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
+      
+      let score = 0;
+      for (const cond of conditions) {
+        const leftVal = getIndicatorValue(
+          key,
+          cond.timeframe,
+          cond.leftType,
+          cond.leftType === 'value' ? cond.leftValue : cond.leftIndicator
+        );
+        const rightVal = getIndicatorValue(
+          key,
+          cond.timeframe,
+          cond.rightType,
+          cond.rightType === 'value' ? cond.rightValue : cond.rightIndicator
+        );
+        const mult = cond.multiplier ?? 1;
+        score += (leftVal - rightVal) * mult;
+      }
+
+      return {
+        ...stock,
+        score,
+      };
+    });
+
+    return [...stocksWithScore].sort((a, b) => b.score - a.score);
+  }, [current?.stocks, current?.scoreConditions, quotes, indicators]);
+
+  // ── Formula management handlers ──
+  const handleAddCondition = () => {
+    setLocalConditions([
+      ...localConditions,
+      { timeframe: '5m', leftType: 'value', leftValue: 0, leftIndicator: 'close', rightType: 'value', rightValue: 0, rightIndicator: 'close', multiplier: 1 }
+    ]);
+  };
+
+  const handleRemoveCondition = (index) => {
+    if (localConditions.length === 1) return;
+    setLocalConditions(localConditions.filter((_, i) => i !== index));
+  };
+
+  const handleConditionChange = (index, field, val) => {
+    const updated = [...localConditions];
+    updated[index][field] = val;
+    setLocalConditions(updated);
+  };
+
+  const handleSaveScoreConditions = async () => {
+    try {
+      const response = await api.put(`/watchlists/${current._id}/score-conditions`, {
+        scoreConditions: localConditions
+      });
+      if (response.data?.success) {
+        onWatchlistsChange?.();
+        setShowScoreSettings(false);
+      }
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to save score settings.');
+    }
+  };
 
   if (!current) {
     return (
@@ -192,6 +450,11 @@ export default function WatchlistDashboard({
       </div>
     );
   }
+
+  const selectCls = "w-full border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-indigo-500 transition-all cursor-pointer";
+  const selectStyle = { background: 'var(--bg-elevated)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' };
+
+  const selectGroupCls = "border-0 bg-transparent text-xs focus:outline-none cursor-pointer max-w-[170px]";
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden p-6 gap-4">
@@ -207,28 +470,10 @@ export default function WatchlistDashboard({
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
-          {/* Timeframe Selector */}
-          <div className="flex items-center gap-1.5 bg-slate-950/20 p-0.5 rounded-lg border" style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}>
-            {['1m', '5m', '15m', '30m', '1h', '1d'].map((tf) => (
-              <button
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
-                  timeframe === tf
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'hover:text-indigo-400'
-                }`}
-                style={timeframe !== tf ? { color: 'var(--text-muted)' } : {}}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
-
-          {/* Loading Indicator / Manual Refresh */}
+          {/* Manual Refresh */}
           <div className="w-8 h-8 flex items-center justify-center rounded-lg border transition-colors cursor-pointer"
                style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' }}
-               onClick={() => setTimeframe((t) => t)} // Trigger reload
+               onClick={() => setRefreshTrigger(t => t + 1)}
           >
             {loading ? (
               <Loader2 size={14} className="animate-spin text-indigo-400" />
@@ -236,8 +481,200 @@ export default function WatchlistDashboard({
               <RefreshCw size={14} className="hover:text-indigo-400 transition-colors" />
             )}
           </div>
+
+          {/* Score Settings Toggle */}
+          <button
+            onClick={() => setShowScoreSettings(prev => !prev)}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border cursor-pointer transition-all flex items-center gap-1.5 ${
+              showScoreSettings ? 'bg-indigo-600 text-white border-indigo-500 shadow-md' : 'hover:text-indigo-400'
+            }`}
+            style={!showScoreSettings ? { background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' } : {}}
+            title="Configure Custom Score Formula"
+          >
+            <Settings size={12} />
+            Score Settings
+          </button>
         </div>
       </div>
+
+      {/* ── Score Settings Collapsible Panel ── */}
+      {showScoreSettings && (
+        <div className="border rounded-2xl p-4 space-y-4 animate-fade-in"
+             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b" style={{ borderColor: 'var(--border-base)' }}>
+            <div>
+              <h3 className="text-xs font-black uppercase tracking-wider text-indigo-400">
+                Configure Custom Score Formula
+              </h3>
+              <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Define score statements. Stocks in the main table will be sorted based on their calculated score.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddCondition}
+              className="flex items-center gap-1 text-[9px] font-black uppercase px-2.5 py-1.5 bg-indigo-600 text-white rounded-lg cursor-pointer hover:bg-indigo-500 transition-colors shadow-md"
+            >
+              <Plus size={10} /> Add Statement
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {localConditions.map((cond, idx) => (
+              <div key={idx} className="flex flex-wrap items-center gap-2 border-b last:border-0 pb-3 last:pb-0" style={{ borderColor: 'var(--border-base)' }}>
+                {/* Timeframe Select */}
+                <div className="w-[75px]">
+                  <select
+                    value={cond.timeframe}
+                    onChange={e => handleConditionChange(idx, 'timeframe', e.target.value)}
+                    className={selectCls} style={selectStyle}
+                  >
+                    {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+                  </select>
+                </div>
+
+                {/* Left Term */}
+                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
+                  <select
+                    value={cond.leftType}
+                    onChange={e => {
+                      handleConditionChange(idx, 'leftType', e.target.value);
+                      if (e.target.value === 'value') {
+                        handleConditionChange(idx, 'leftValue', 0);
+                      } else {
+                        handleConditionChange(idx, 'leftIndicator', 'close');
+                      }
+                    }}
+                    className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <option value="value">Value</option>
+                    <option value="indicator">Indicator</option>
+                  </select>
+
+                  {cond.leftType === 'value' ? (
+                    <input
+                      type="number" step="any" required placeholder="0.0"
+                      value={cond.leftValue ?? ''}
+                      onChange={e => handleConditionChange(idx, 'leftValue', e.target.value)}
+                      className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
+                      style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                    />
+                  ) : (
+                    <select
+                      value={cond.leftIndicator}
+                      onChange={e => handleConditionChange(idx, 'leftIndicator', e.target.value)}
+                      className={selectGroupCls}
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      {INDICATOR_GROUPS.map(g => (
+                        <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                          {g.options.map(ind => (
+                            <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                              {ind.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <span className="text-slate-400 font-bold px-1">—</span>
+
+                {/* Right Term */}
+                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
+                  <select
+                    value={cond.rightType}
+                    onChange={e => {
+                      handleConditionChange(idx, 'rightType', e.target.value);
+                      if (e.target.value === 'value') {
+                        handleConditionChange(idx, 'rightValue', 0);
+                      } else {
+                        handleConditionChange(idx, 'rightIndicator', 'close');
+                      }
+                    }}
+                    className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <option value="value">Value</option>
+                    <option value="indicator">Indicator</option>
+                  </select>
+
+                  {cond.rightType === 'value' ? (
+                    <input
+                      type="number" step="any" required placeholder="0.0"
+                      value={cond.rightValue ?? ''}
+                      onChange={e => handleConditionChange(idx, 'rightValue', e.target.value)}
+                      className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
+                      style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                    />
+                  ) : (
+                    <select
+                      value={cond.rightIndicator}
+                      onChange={e => handleConditionChange(idx, 'rightIndicator', e.target.value)}
+                      className={selectGroupCls}
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      {INDICATOR_GROUPS.map(g => (
+                        <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                          {g.options.map(ind => (
+                            <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                              {ind.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <span className="text-slate-400 font-bold px-1">✕</span>
+
+                {/* Multiplier */}
+                <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
+                  <span className="text-[10px] uppercase font-black" style={{ color: 'var(--text-muted)' }}>Multiplier:</span>
+                  <input
+                    type="number" step="any" required placeholder="1.0"
+                    value={cond.multiplier ?? ''}
+                    onChange={e => handleConditionChange(idx, 'multiplier', e.target.value)}
+                    className="w-16 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none focus:border-indigo-500"
+                    style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+
+                {/* Actions */}
+                <button
+                  type="button"
+                  onClick={() => handleRemoveCondition(idx)}
+                  disabled={localConditions.length === 1}
+                  className="p-1.5 rounded-lg border hover:text-rose-400 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed text-slate-500 transition-colors ml-auto sm:ml-0"
+                  style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}
+                  title="Remove Statement"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t" style={{ borderColor: 'var(--border-base)' }}>
+            <button
+              onClick={() => setShowScoreSettings(false)}
+              className="px-4 py-2 border text-xs font-bold rounded-xl cursor-pointer hover:bg-slate-800/10 transition-colors"
+              style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-muted)' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSaveScoreConditions}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors shadow-md"
+            >
+              Save Formula
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Table Container ── */}
       <div className="flex-1 overflow-auto border rounded-xl" style={{ borderColor: 'var(--border-base)', background: 'var(--bg-surface)' }}>
@@ -261,17 +698,14 @@ export default function WatchlistDashboard({
                 <th className="p-3 font-black uppercase tracking-wider text-[10px]" style={{ color: 'var(--text-muted)' }}>Low</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px]" style={{ color: 'var(--text-muted)' }}>Prev Close</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px]" style={{ color: 'var(--text-muted)' }}>Volume</th>
-                <th className="p-3 font-black uppercase tracking-wider text-[10px] text-amber-400" style={{ borderColor: 'var(--border-base)' }}>SMA 20</th>
-                <th className="p-3 font-black uppercase tracking-wider text-[10px] text-purple-400" style={{ borderColor: 'var(--border-base)' }}>EMA 20</th>
-                <th className="p-3 font-black uppercase tracking-wider text-[10px] text-sky-400" style={{ borderColor: 'var(--border-base)' }}>RSI 14</th>
+                <th className="p-3 font-black uppercase tracking-wider text-[10px] text-indigo-400" style={{ borderColor: 'var(--border-base)' }}>Score</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y" style={{ borderColor: 'var(--border-base)' }}>
-              {current.stocks.map((stock) => {
+              {sortedStocks.map((stock) => {
                 const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
                 const quote = quotes[key];
-                const ind = indicators[key] || { sma20: null, ema20: null, rsi14: null };
                 const flash = flashes[key];
 
                 const pct = quote?.percentChange ?? 0;
@@ -282,12 +716,6 @@ export default function WatchlistDashboard({
                                : flash === 'down' ? 'text-rose-300'
                                : isUp ? 'text-emerald-400'
                                : isDown ? 'text-rose-400' : '';
-
-                const rsiVal = ind.rsi14;
-                const rsiClass = rsiVal == null ? ''
-                               : rsiVal >= 70 ? 'text-red-400 font-bold'
-                               : rsiVal <= 30 ? 'text-emerald-400 font-bold'
-                               : 'text-slate-300';
 
                 return (
                   <tr
@@ -347,19 +775,9 @@ export default function WatchlistDashboard({
                       {fmtV(quote?.volume)}
                     </td>
 
-                    {/* SMA 20 */}
-                    <td className="p-3 font-mono text-amber-400/80">
-                      ₹{fmt2(ind.sma20)}
-                    </td>
-
-                    {/* EMA 20 */}
-                    <td className="p-3 font-mono text-purple-400/80">
-                      ₹{fmt2(ind.ema20)}
-                    </td>
-
-                    {/* RSI 14 */}
-                    <td className={`p-3 font-mono ${rsiClass}`}>
-                      {fmtI(rsiVal)}
+                    {/* Score */}
+                    <td className="p-3 font-mono font-bold text-indigo-400/90 text-sm">
+                      {fmt2(stock.score)}
                     </td>
 
                     {/* Actions */}

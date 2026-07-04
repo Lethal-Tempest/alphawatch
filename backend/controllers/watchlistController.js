@@ -47,3 +47,31 @@ exports.deleteWatchlist = async (req, res, next) => {
     res.json({ success: true });
   } catch (error) { next(error); }
 };
+
+exports.updateScoreConditions = async (req, res, next) => {
+  try {
+    const { scoreConditions } = req.body;
+    if (!Array.isArray(scoreConditions)) {
+      return res.status(400).json({ error: 'scoreConditions must be an array.' });
+    }
+    
+    const cleaned = scoreConditions.map(c => ({
+      timeframe: c.timeframe || '5m',
+      leftType: c.leftType || 'value',
+      leftValue: c.leftType === 'value' ? parseFloat(c.leftValue || 0) : undefined,
+      leftIndicator: c.leftType === 'indicator' ? c.leftIndicator || 'close' : undefined,
+      rightType: c.rightType || 'value',
+      rightValue: c.rightType === 'value' ? parseFloat(c.rightValue || 0) : undefined,
+      rightIndicator: c.rightType === 'indicator' ? c.rightIndicator || 'close' : undefined,
+      multiplier: isNaN(parseFloat(c.multiplier)) ? 1 : parseFloat(c.multiplier)
+    }));
+
+    const wl = await Watchlist.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.id },
+      { scoreConditions: cleaned },
+      { new: true }
+    );
+    if (!wl) return res.status(404).json({ error: 'Watchlist not found.' });
+    res.json({ success: true, watchlist: wl });
+  } catch (error) { next(error); }
+};

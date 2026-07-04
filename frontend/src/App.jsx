@@ -494,6 +494,7 @@ export default function App() {
                       onOpenTable={handleOpenTable}
                       onOpenAlert={handleOpenAlert}
                       onRemoveStock={handleRemoveFromWatchlist}
+                      onWatchlistsChange={fetchWatchlists}
                     />
                   ) : (
                     <BacktestDashboard
