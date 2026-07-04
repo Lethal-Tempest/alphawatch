@@ -193,3 +193,76 @@ exports.sendCombinedAlertEmail = async (toEmail, alert, triggeredStocks) => {
   }
 };
 
+exports.sendTradeEmail = async (toEmail, tradeDetails) => {
+  try {
+    console.log(`\n📬 [Email Pipeline] Initializing send logic for trade execution log...`);
+    const client = await getTransporter();
+    const from = process.env.SMTP_FROM || '"AlphaWatch AutoTrade" <autotrade@alphawatch.com>';
+    const subject = `🚀 AutoTrade Executed: ${tradeDetails.type.toUpperCase()} ${tradeDetails.exchange}:${tradeDetails.symbol}`;
+
+    const html = `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div style="background-color: #0f172a; color: white; padding: 24px; text-align: center;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.03em;">AlphaWatch AutoTrade</h1>
+          <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.8;">Order Execution Alert</p>
+        </div>
+        <div style="padding: 24px; background-color: #ffffff; color: #1e293b; line-height: 1.6;">
+          <p style="margin-top: 0;">Hi there,</p>
+          <p>The Auto-Trading Bot has successfully executed a <b>${tradeDetails.type.toUpperCase()}</b> order:</p>
+          
+          <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px;">
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Stock</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a;">${tradeDetails.exchange}:${tradeDetails.symbol}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Action</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: ${tradeDetails.type === 'buy' ? '#10b981' : '#ef4444'}; text-transform: uppercase;">${tradeDetails.type}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Quantity</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a;">${tradeDetails.quantity}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Execution Price</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a;">₹${Number(tradeDetails.price).toFixed(2)}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Total Value</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a;">₹${Number(tradeDetails.price * tradeDetails.quantity).toFixed(2)}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;">
+              <td style="padding: 8px 0; color: #64748b;">Order Mode</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a; text-transform: capitalize;">${tradeDetails.mode}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b;">HDFC Order ID</td>
+              <td style="padding: 8px 0; font-weight: 800; text-align: right; color: #0f172a; font-family: monospace;">${tradeDetails.orderId}</td>
+            </tr>
+          </table>
+
+          <p style="font-size: 11px; color: #94a3b8; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 16px;">
+            Executed At: ${new Date().toLocaleString('en-IN')}<br/>
+            Engine: HDFC OpenAPI Auto-Trading Bot
+          </p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+          This email was sent dynamically by the AlphaWatch AutoTrade bot.
+        </div>
+      </div>
+    `;
+
+    console.log(`📬 [Email Pipeline] Sending trade execution email to ${toEmail}...`);
+    const info = await client.sendMail({
+      from,
+      to: toEmail,
+      subject,
+      html
+    });
+
+    console.log(`📬 [Email Pipeline] Trade execution email sent successfully! MessageID: ${info.messageId}`);
+  } catch (err) {
+    console.error('[EmailService] Failed to send trade email alert:', err.message);
+  }
+};
+

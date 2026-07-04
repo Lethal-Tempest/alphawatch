@@ -11,6 +11,7 @@ import LiveTickerBar   from './components/ticker/Livetickerbar';
 import StockDataTable  from './components/datatable/Stockdatatable';
 import WatchlistDashboard from './components/watchlist/WatchlistDashboard';
 import BacktestDashboard from './components/backtest/BacktestDashboard';
+import AutoTradeDashboard from './components/autotrade/AutoTradeDashboard';
 import { useSocket }   from './services/useSocket';
 import { useTheme }    from './contexts/ThemeContext';
 import api             from './services/api';
@@ -175,6 +176,11 @@ export default function App() {
   }, [activeIndicators]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('request_token') || params.get('requestToken')) {
+      setActiveMainTab('autotrade');
+    }
+
     const token = localStorage.getItem('token');
     if (token) {
       try {
@@ -468,6 +474,15 @@ export default function App() {
                         >
                           Backtest
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveMainTab('autotrade')}
+                          className={`px-3 py-1 rounded-md text-[10px] font-black uppercase cursor-pointer transition-all ${
+                            activeMainTab === 'autotrade' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-indigo-400'
+                          }`}
+                        >
+                          Auto Trade
+                        </button>
                       </div>
                     </div>
 
@@ -496,11 +511,13 @@ export default function App() {
                       onRemoveStock={handleRemoveFromWatchlist}
                       onWatchlistsChange={fetchWatchlists}
                     />
-                  ) : (
+                  ) : activeMainTab === 'backtest' ? (
                     <BacktestDashboard
                       watchlists={watchlists}
                       selectedId={selectedWatchlistId}
                     />
+                  ) : (
+                    <AutoTradeDashboard />
                   )
                 ) : (
                   <div className="flex flex-col gap-6 w-full animate-fade-in">

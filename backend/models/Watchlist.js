@@ -37,6 +37,16 @@ const watchlistSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
       },
+      autoTradeEnabled: {
+        type: Boolean,
+        default: false,
+      },
+      assignedBuyConditionId: {
+        type: mongoose.Schema.Types.ObjectId,
+      },
+      assignedSellConditionId: {
+        type: mongoose.Schema.Types.ObjectId,
+      },
     },
   ],
   isDefault: {

@@ -16,6 +16,9 @@
 const angelOne         = require('./angelOneService');
 const candleAggregator = require('./candleAggregator');
 const alertEngine      = require('./alertEngine');
+const User             = require('../models/User');
+const Watchlist        = require('../models/Watchlist');
+const autoTradeEngine  = require('./autoTradeEngine');
 
 // Set of "EXCHANGE:SYMBOL" keys currently being polled
 const activeSubscriptions = new Set();
@@ -74,7 +77,22 @@ exports.runPollingCycle = async () => {
   try {
     const activeAlerts = await alertEngine.getActiveAlerts();
     const alertKeys = await alertEngine.getActiveAlertKeys(activeAlerts);
-    const allKeys = new Set([...activeSubscriptions, ...alertKeys]);
+    
+    // Fetch whitelisted stocks for auto-trading
+    const autoTradeUsers = await User.find({ 'autoTradeConfig.enabled': true });
+    const autoTradeUserIds = autoTradeUsers.map((u) => u._id);
+    const autoTradeWatchlists = await Watchlist.find({ userId: { $in: autoTradeUserIds } });
+    const autoTradeKeys = [];
+    for (const wl of autoTradeWatchlists) {
+      if (!wl.stocks) continue;
+      for (const stock of wl.stocks) {
+        if (stock.autoTradeEnabled) {
+          autoTradeKeys.push(`${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`);
+        }
+      }
+    }
+
+    const allKeys = new Set([...activeSubscriptions, ...alertKeys, ...autoTradeKeys]);
     if (allKeys.size === 0) return;
 
     // NSE/BSE: 09:15 - 15:30 IST (server must run with TZ=Asia/Kolkata)
@@ -180,6 +198,9 @@ exports.runPollingCycle = async () => {
 
     // Evaluate all active alerts once for the entire polling cycle
     await alertEngine.evaluateAll(activeAlerts, liveMarketState);
+
+    // Run the auto trading bot engine
+    await autoTradeEngine.runAutoTradeCycle(liveMarketState);
 
   } catch (err) {
     console.error(`[Polling] Batch polling cycle failed:`, err.message);

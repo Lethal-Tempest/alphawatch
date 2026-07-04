@@ -43,6 +43,19 @@ const userSchema = new mongoose.Schema({
       default: [],
     },
   },
+  hdfcAccessToken: { type: String },
+  hdfcTokenExpiresAt: { type: Date },
+  autoTradeConfig: {
+    enabled: { type: Boolean, default: false },
+    capital: { type: Number, default: 50000 },
+  },
+  conditions: [
+    {
+      name: { type: String, required: true },
+      type: { type: String, enum: ['buy', 'sell'], required: true },
+      rules: { type: Array, default: [] }
+    }
+  ],
   createdAt: { type: Date, default: Date.now },
 });
 

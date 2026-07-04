@@ -9,8 +9,8 @@ const fmt2 = (n) => (n != null && !isNaN(n)) ? Number(n).toFixed(2) : '—';
 const fmtV = (n) => {
   if (n == null || isNaN(n)) return '—';
   if (n >= 1_00_00_000) return (n / 1_00_00_000).toFixed(1) + ' Cr';
-  if (n >= 1_00_000)    return (n / 1_00_000).toFixed(1) + ' L';
-  if (n >= 1_000)       return (n / 1_000).toFixed(0) + 'K';
+  if (n >= 1_00_000) return (n / 1_00_000).toFixed(1) + ' L';
+  if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K';
   return String(n);
 };
 
@@ -274,14 +274,35 @@ export default function WatchlistDashboard({
   const [loading, setLoading] = useState(false);
   const [flashes, setFlashes] = useState({});
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  
+
   // Score settings and local copy for modifications
   const [showScoreSettings, setShowScoreSettings] = useState(false);
   const [localConditions, setLocalConditions] = useState([]);
 
+  // Condition pool states for stock-specific assignments
+  const [conditionsPool, setConditionsPool] = useState([]);
+  const [selectedStockForAssign, setSelectedStockForAssign] = useState(null);
+  const [selectedBuyId, setSelectedBuyId] = useState('');
+  const [selectedSellId, setSelectedSellId] = useState('');
+
   const prevLtps = useRef({});
   const flashTimers = useRef({});
   const current = watchlists.find((w) => w._id === selectedId);
+
+  // Sync condition templates pool from backend
+  useEffect(() => {
+    const fetchConditions = async () => {
+      try {
+        const res = await api.get('/trade/conditions');
+        if (res.data?.success) {
+          setConditionsPool(res.data.conditions || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch conditions pool:', err);
+      }
+    };
+    fetchConditions();
+  }, [refreshTrigger, selectedId]);
 
   // Sync local conditions when the active watchlist changes
   useEffect(() => {
@@ -315,7 +336,7 @@ export default function WatchlistDashboard({
         // 1. Fetch batch quotes (instant)
         const payload = current.stocks.map((s) => ({ symbol: s.symbol, exchange: s.exchange }));
         const quoteRes = await api.post('/stock/quotes', { stocks: payload });
-        
+
         if (cancelled) return;
 
         const newQuotes = {};
@@ -350,17 +371,17 @@ export default function WatchlistDashboard({
         // 2. Fetch indicators for all stocks progressively across all needed timeframes
         current.stocks.forEach(async (s) => {
           const key = `${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`;
-          
+
           for (const tf of neededTimeframes) {
             try {
               const indData = await fetchIndicators(s.exchange, s.symbol, tf);
               if (cancelled) return;
-              
+
               const latestValues = {};
               for (const [indKey, arr] of Object.entries(indData)) {
                 latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
               }
-              
+
               setIndicators((prev) => ({
                 ...prev,
                 [`${key}:${tf}`]: latestValues,
@@ -389,7 +410,7 @@ export default function WatchlistDashboard({
 
     const handleTick = (data) => {
       const key = `${data.exchange.toUpperCase()}:${data.symbol.toUpperCase()}`;
-      
+
       // Update quote
       setQuotes((prev) => {
         if (!prev[key]) return prev;
@@ -447,11 +468,11 @@ export default function WatchlistDashboard({
       if (!neededTimeframes.includes(data.interval)) return;
       const [exchange, symbol] = data.key.split(':');
       const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
-      
+
       try {
         invalidateIndicatorCache(exchange, symbol, data.interval);
         const indData = await fetchIndicators(exchange, symbol, data.interval);
-        
+
         const latestValues = {};
         for (const [indKey, arr] of Object.entries(indData)) {
           latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
@@ -479,7 +500,7 @@ export default function WatchlistDashboard({
     }
     const indicatorName = valOrIndicator;
     const quote = quotes[stockKey];
-    
+
     if (indicatorName === 'close' || indicatorName === 'ltp') {
       return quote?.ltp ?? 0;
     }
@@ -498,7 +519,7 @@ export default function WatchlistDashboard({
 
     const indObj = indicators[`${stockKey}:${tf}`];
     if (!indObj) return 0;
-    
+
     const value = indObj[indicatorName];
     return value != null && !isNaN(value) ? value : 0;
   };
@@ -511,7 +532,7 @@ export default function WatchlistDashboard({
 
     const stocksWithScore = current.stocks.map((stock) => {
       const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
-      
+
       const resolvedTokens = conditions.map((c) => {
         if (c.type === 'operand') {
           if (c.valueType === 'value') {
@@ -611,8 +632,8 @@ export default function WatchlistDashboard({
         <div className="flex items-center gap-3 shrink-0">
           {/* Manual Refresh */}
           <div className="w-8 h-8 flex items-center justify-center rounded-lg border transition-colors cursor-pointer"
-               style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' }}
-               onClick={() => setRefreshTrigger(t => t + 1)}
+            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' }}
+            onClick={() => setRefreshTrigger(t => t + 1)}
           >
             {loading ? (
               <Loader2 size={14} className="animate-spin text-indigo-400" />
@@ -624,9 +645,8 @@ export default function WatchlistDashboard({
           {/* Score Settings Toggle */}
           <button
             onClick={() => setShowScoreSettings(prev => !prev)}
-            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border cursor-pointer transition-all flex items-center gap-1.5 ${
-              showScoreSettings ? 'bg-indigo-600 text-white border-indigo-500 shadow-md' : 'hover:text-indigo-400'
-            }`}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border cursor-pointer transition-all flex items-center gap-1.5 ${showScoreSettings ? 'bg-indigo-600 text-white border-indigo-500 shadow-md' : 'hover:text-indigo-400'
+              }`}
             style={!showScoreSettings ? { background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' } : {}}
             title="Configure Custom Score Formula"
           >
@@ -639,7 +659,7 @@ export default function WatchlistDashboard({
       {/* ── Score Settings Collapsible Panel ── */}
       {showScoreSettings && (
         <div className="border rounded-2xl p-5 space-y-4 animate-fade-in"
-             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b" style={{ borderColor: 'var(--border-base)' }}>
             <div>
               <h3 className="text-xs font-black uppercase tracking-wider text-indigo-400">
@@ -660,7 +680,7 @@ export default function WatchlistDashboard({
 
           {/* Formula Display Area */}
           <div className="flex flex-wrap items-center gap-2 p-4 min-h-[70px] rounded-xl border border-dashed"
-               style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
+            style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
             {localConditions.map((cond, idx) => {
               if (cond.type === 'parenthesis') {
                 return (
@@ -870,6 +890,7 @@ export default function WatchlistDashboard({
                 <th className="p-3 font-black uppercase tracking-wider text-[10px]" style={{ color: 'var(--text-muted)' }}>Prev Close</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px]" style={{ color: 'var(--text-muted)' }}>Volume</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px] text-indigo-400" style={{ borderColor: 'var(--border-base)' }}>Score</th>
+                <th className="p-3 font-black uppercase tracking-wider text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>Auto Trade</th>
                 <th className="p-3 font-black uppercase tracking-wider text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>Actions</th>
               </tr>
             </thead>
@@ -884,9 +905,9 @@ export default function WatchlistDashboard({
                 const isDown = pct < 0;
 
                 const ltpClass = flash === 'up' ? 'text-emerald-300'
-                               : flash === 'down' ? 'text-rose-300'
-                               : isUp ? 'text-emerald-400'
-                               : isDown ? 'text-rose-400' : '';
+                  : flash === 'down' ? 'text-rose-300'
+                    : isUp ? 'text-emerald-400'
+                      : isDown ? 'text-rose-400' : '';
 
                 return (
                   <tr
@@ -908,14 +929,14 @@ export default function WatchlistDashboard({
 
                     {/* LTP */}
                     <td className={`p-3 font-mono font-bold transition-colors duration-150 ${ltpClass}`}
-                        style={!ltpClass ? { color: 'var(--text-primary)' } : {}}>
+                      style={!ltpClass ? { color: 'var(--text-primary)' } : {}}>
                       ₹{fmt2(quote?.ltp)}
                     </td>
 
                     {/* Change % */}
                     <td className="p-3">
                       <span className={`font-mono font-bold flex items-center gap-0.5 ${isUp ? 'text-emerald-400' : isDown ? 'text-rose-400' : ''}`}
-                            style={!isUp && !isDown ? { color: 'var(--text-muted)' } : {}}>
+                        style={!isUp && !isDown ? { color: 'var(--text-muted)' } : {}}>
                         {isUp ? <TrendingUp size={10} /> : isDown ? <TrendingDown size={10} /> : <Minus size={10} />}
                         {pct >= 0 ? '+' : ''}{fmt2(pct)}%
                       </span>
@@ -949,6 +970,55 @@ export default function WatchlistDashboard({
                     {/* Score */}
                     <td className="p-3 font-mono font-bold text-indigo-400/90 text-sm">
                       {fmt2(stock.score)}
+                    </td>
+
+                    {/* Auto Trade */}
+                    <td className="p-3">
+                      {stock.autoTradeEnabled ? (
+                        (() => {
+                          const buyCond = conditionsPool.find((c) => c._id === stock.assignedBuyConditionId);
+                          const sellCond = conditionsPool.find((c) => c._id === stock.assignedSellConditionId);
+                          return (
+                            <div className="flex flex-col gap-0.5 text-[9px] text-left min-w-[130px]">
+                              <span className="font-extrabold text-emerald-400">🟢 Buy: {buyCond ? buyCond.name : 'Unknown'}</span>
+                              <span className="font-extrabold text-rose-400">🔴 Sell: {sellCond ? sellCond.name : 'Unknown'}</span>
+                              <button
+                                onClick={async () => {
+                                  const confirmed = window.confirm(`Are you sure you want to DISABLE auto trading for ${stock.symbol}?`);
+                                  if (!confirmed) return;
+                                  try {
+                                    const res = await api.post('/trade/toggle-stock', {
+                                      watchlistId: current._id,
+                                      symbol: stock.symbol,
+                                      exchange: stock.exchange,
+                                      autoTradeEnabled: false
+                                    });
+                                    if (res.data?.success) onWatchlistsChange?.();
+                                  } catch (err) {
+                                    alert(err.response?.data?.error || 'Failed to disable auto trading.');
+                                  }
+                                }}
+                                className="text-[8px] text-rose-500 hover:text-rose-400 underline cursor-pointer text-left mt-0.5"
+                              >
+                                Disable
+                              </button>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div className="text-center">
+                          <button
+                            onClick={() => {
+                              setSelectedBuyId('');
+                              setSelectedSellId('');
+                              setSelectedStockForAssign(stock);
+                            }}
+                            className="px-2.5 py-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 text-[10px] font-black uppercase rounded border border-indigo-500/20 cursor-pointer transition-colors"
+                          >
+                            + Enable
+                          </button>
+                        </div>
+                      )}
                     </td>
 
                     {/* Actions */}
@@ -995,6 +1065,107 @@ export default function WatchlistDashboard({
           </table>
         )}
       </div>
+
+      {/* Reusable Allocation Picker Modal */}
+      {selectedStockForAssign && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="max-w-md w-full border rounded-2xl p-6 space-y-4 shadow-2xl" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+            <div>
+              <h3 className="text-sm font-black uppercase tracking-wider text-slate-100">
+                Setup Auto Trading for {selectedStockForAssign.symbol}
+              </h3>
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                Allocate exactly one Buy and one Sell strategy template from your pool for this stock.
+              </p>
+            </div>
+
+            {conditionsPool.length === 0 ? (
+              <div className="space-y-4 py-2">
+                <p className="text-xs text-amber-400 font-bold bg-amber-500/10 p-3 rounded-lg border border-amber-500/20">
+                  ⚠️ No templates pool found. Please go to the "Auto Trade" tab first and add Buy/Sell conditions template rules.
+                </p>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setSelectedStockForAssign(null)}
+                    className="px-4 py-2 border text-xs font-bold rounded-xl cursor-pointer hover:bg-slate-800"
+                    style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-muted)' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase" style={{ color: 'var(--text-muted)' }}>Buy Condition Template</label>
+                  <select
+                    value={selectedBuyId}
+                    onChange={(e) => setSelectedBuyId(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
+                    style={selectStyle}
+                  >
+                    <option value="">-- Choose Buy Condition --</option>
+                    {conditionsPool.filter(c => c.type === 'buy').map(c => (
+                      <option key={c._id} value={c._id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase" style={{ color: 'var(--text-muted)' }}>Sell Condition Template</label>
+                  <select
+                    value={selectedSellId}
+                    onChange={(e) => setSelectedSellId(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
+                    style={selectStyle}
+                  >
+                    <option value="">-- Choose Sell Condition --</option>
+                    {conditionsPool.filter(c => c.type === 'sell').map(c => (
+                      <option key={c._id} value={c._id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setSelectedStockForAssign(null)}
+                    className="px-4 py-2 border text-xs font-bold rounded-xl cursor-pointer hover:bg-slate-800"
+                    style={{ color: 'var(--text-secondary)', borderColor: 'var(--border-muted)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedBuyId || !selectedSellId) {
+                        return alert('Please select both a Buy and a Sell condition.');
+                      }
+                      try {
+                        const res = await api.post('/trade/toggle-stock', {
+                          watchlistId: current._id,
+                          symbol: selectedStockForAssign.symbol,
+                          exchange: selectedStockForAssign.exchange,
+                          autoTradeEnabled: true,
+                          assignedBuyConditionId: selectedBuyId,
+                          assignedSellConditionId: selectedSellId
+                        });
+                        if (res.data?.success) {
+                          onWatchlistsChange?.();
+                          setSelectedStockForAssign(null);
+                        }
+                      } catch (err) {
+                        alert(err.response?.data?.error || 'Failed to enable auto trading.');
+                      }
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors shadow-md"
+                  >
+                    Confirm Enable
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
