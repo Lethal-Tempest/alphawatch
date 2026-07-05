@@ -67,6 +67,9 @@ const watchlistSchema = new mongoose.Schema({
       }
     ]
   },
+  assignedScoringSystemId: {
+    type: mongoose.Schema.Types.ObjectId,
+  },
   createdAt: { type: Date, default: Date.now },
 });
 

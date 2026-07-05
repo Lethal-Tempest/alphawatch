@@ -89,3 +89,16 @@ exports.updateScoreConditions = async (req, res, next) => {
     res.json({ success: true, watchlist: wl });
   } catch (error) { next(error); }
 };
+
+exports.assignScoringSystem = async (req, res, next) => {
+  try {
+    const { assignedScoringSystemId } = req.body;
+    const wl = await Watchlist.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.id },
+      { assignedScoringSystemId: assignedScoringSystemId || null },
+      { new: true }
+    );
+    if (!wl) return res.status(404).json({ error: 'Watchlist not found.' });
+    res.json({ success: true, watchlist: wl });
+  } catch (error) { next(error); }
+};

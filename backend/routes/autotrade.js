@@ -64,6 +64,23 @@ router.get('/config', async (req, res, next) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
+    let scoringSystems = user.scoringSystems || [];
+    if (scoringSystems.length === 0) {
+      user.scoringSystems.push({
+        name: 'Default Close Price',
+        conditions: [
+          {
+            type: 'operand',
+            valueType: 'indicator',
+            timeframe: '5m',
+            indicator: 'close'
+          }
+        ]
+      });
+      await user.save();
+      scoringSystems = user.scoringSystems;
+    }
+
     const connected = !!(user.hdfcAccessToken && user.hdfcTokenExpiresAt && new Date() < new Date(user.hdfcTokenExpiresAt));
 
     res.json({
@@ -74,6 +91,7 @@ router.get('/config', async (req, res, next) => {
         capital: 50000
       },
       conditions: user.conditions || [],
+      scoringSystems,
       connected
     });
   } catch (error) {
@@ -260,6 +278,174 @@ router.post('/toggle-stock', async (req, res, next) => {
 
     await wl.save();
     res.json({ success: true, stock });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Scoring Systems Pool Management: Get all scoring systems
+ */
+router.get('/scoring-systems', async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    res.json({ success: true, scoringSystems: user.scoringSystems || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const validIndicatorsForParsing = new Set([
+  'close', 'open', 'high', 'low', 'volume',
+  'sma20', 'deltaSma20', 'deltaSqSma20', 'sma50', 'deltaSma50', 'deltaSqSma50', 'sma100', 'deltaSma100', 'deltaSqSma100', 'sma200', 'deltaSma200', 'deltaSqSma200',
+  'ema20', 'deltaEma20', 'deltaSqEma20', 'ema50', 'deltaEma50', 'deltaSqEma50', 'ema100', 'deltaEma100', 'deltaSqEma100', 'ema200', 'deltaEma200', 'deltaSqEma200',
+  'rsi14', 'deltaRsi14', 'deltaSqRsi14',
+  'bbUpper', 'deltaBbUpper', 'deltaSqBbUpper', 'bbMiddle', 'deltaBbMiddle', 'deltaSqBbMiddle', 'bbLower', 'deltaBbLower', 'deltaSqBbLower',
+  'macdLine', 'deltaMACD', 'deltaSqMacdLine', 'macdSignal', 'deltaMacdSignal', 'deltaSqMacdSignal', 'macdHist', 'deltaMacdHist', 'deltaSqMacdHist',
+  'adx', 'deltaADX', 'deltaSqADX', 'plusDI', 'deltaPlusDI', 'deltaSqPlusDI', 'minusDI', 'deltaMinusDI', 'deltaSqMinusDI', 'di', 'deltaDI', 'deltaSqDI',
+  'mfi14', 'deltaMfi14', 'deltaSqMfi14',
+  'smiLine', 'deltaSMI', 'deltaSqSmiLine', 'smiSignal', 'deltaSMISignal', 'deltaSqSmiSignal', 'smiDist', 'deltaSMIDist', 'deltaSqSMIDist'
+]);
+
+function parseFormulaString(formulaStr) {
+  const regex = /(\(|\)|\+|-|\*|\/|[^\s()+\-*/]+)/g;
+  const rawTokens = formulaStr.match(regex) || [];
+  
+  const tokens = [];
+  for (const raw of rawTokens) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+
+    if (['(', ')'].includes(trimmed)) {
+      tokens.push({ type: 'parenthesis', valueStr: trimmed });
+    } else if (['+', '-', '*', '/'].includes(trimmed)) {
+      tokens.push({ type: 'operator', valueStr: trimmed });
+    } else {
+      if (!isNaN(trimmed)) {
+        tokens.push({ type: 'operand', valueType: 'value', value: parseFloat(trimmed) });
+      } else {
+        let timeframe = '5m';
+        let indicatorName = trimmed;
+        if (trimmed.includes(':')) {
+          const parts = trimmed.split(':');
+          timeframe = parts[0];
+          indicatorName = parts[1];
+        }
+
+        if (!validIndicatorsForParsing.has(indicatorName)) {
+          throw new Error(`Unknown indicator name: "${indicatorName}"`);
+        }
+
+        tokens.push({
+          type: 'operand',
+          valueType: 'indicator',
+          timeframe,
+          indicator: indicatorName
+        });
+      }
+    }
+  }
+
+  let balance = 0;
+  for (const t of tokens) {
+    if (t.type === 'parenthesis') {
+      if (t.valueStr === '(') balance++;
+      else balance--;
+      if (balance < 0) {
+        throw new Error('Mismatched parenthesis: closing bracket ")" without opening bracket "("');
+      }
+    }
+  }
+  if (balance !== 0) {
+    throw new Error('Mismatched parenthesis: missing closing bracket ")"');
+  }
+
+  return tokens;
+}
+
+/**
+ * Scoring Systems Pool Management: Create a new scoring system
+ */
+router.post('/scoring-systems', async (req, res, next) => {
+  try {
+    const { name, conditions, formula } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required.' });
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    let finalConditions = Array.isArray(conditions) ? conditions : [];
+    if (formula !== undefined) {
+      try {
+        finalConditions = parseFormulaString(formula);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+
+    user.scoringSystems.push({
+      name,
+      conditions: finalConditions
+    });
+
+    await user.save();
+    res.json({ success: true, scoringSystems: user.scoringSystems });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Scoring Systems Pool Management: Edit a scoring system template
+ */
+router.put('/scoring-systems/:id', async (req, res, next) => {
+  try {
+    const { name, conditions, formula } = req.body;
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    const sys = user.scoringSystems.id(req.params.id);
+    if (!sys) return res.status(404).json({ error: 'Scoring system not found.' });
+
+    if (name !== undefined) sys.name = name;
+    
+    if (formula !== undefined) {
+      try {
+        sys.conditions = parseFormulaString(formula);
+      } catch (err) {
+        return res.status(400).json({ error: err.message });
+      }
+    } else if (conditions !== undefined) {
+      sys.conditions = Array.isArray(conditions) ? conditions : [];
+    }
+
+    await user.save();
+    res.json({ success: true, scoringSystems: user.scoringSystems });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Scoring Systems Pool Management: Delete a scoring system template
+ */
+router.delete('/scoring-systems/:id', async (req, res, next) => {
+  try {
+    const sysId = req.params.id;
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    user.scoringSystems = user.scoringSystems.filter((s) => s._id.toString() !== sysId);
+    await user.save();
+
+    // Clean watchlist pointers referencing this deleted template
+    await Watchlist.updateMany(
+      { userId: req.user.id, assignedScoringSystemId: sysId },
+      { $unset: { assignedScoringSystemId: "" } }
+    );
+
+    res.json({ success: true, scoringSystems: user.scoringSystems });
   } catch (error) {
     next(error);
   }

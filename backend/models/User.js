@@ -61,6 +61,12 @@ const userSchema = new mongoose.Schema({
       ]
     }
   ],
+  scoringSystems: [
+    {
+      name: { type: String, required: true },
+      conditions: { type: Array, default: [] }
+    }
+  ],
   createdAt: { type: Date, default: Date.now },
 });
 

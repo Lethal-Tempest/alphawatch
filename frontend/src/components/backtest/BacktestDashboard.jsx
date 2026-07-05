@@ -342,6 +342,8 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
   });
   const [loading, setLoading] = useState(false);
   const [selectedStockDetails, setSelectedStockDetails] = useState(null);
+  const [activeGroupInput, setActiveGroupInput] = useState(null); // { type: 'buy'|'sell', gIdx: number }
+  const [activeCaretPos, setActiveCaretPos] = useState(0);
 
   // Sync to LocalStorage on updates
   useEffect(() => {
@@ -438,35 +440,207 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
     setter(updated);
   };
 
+  const ALL_INDICATOR_KEYS = INDICATOR_GROUPS.flatMap(g => g.options.map(opt => opt.key));
+
+  const convertGroupRulesToString = (rules) => {
+    if (!rules || !rules.length) return '';
+    return rules.map(r => {
+      const rightVal = r.rightType === 'value' ? r.rightValue : r.rightIndicator;
+      return `${r.leftIndicator} ${r.operator} ${rightVal}`;
+    }).join(' AND ');
+  };
+
+  const parseGroupTextFormula = (formulaStr) => {
+    if (!formulaStr || !formulaStr.trim()) return [];
+    const ruleStrings = formulaStr.split(/\s+[aA][nN][dD]\s+/);
+    const rules = [];
+    const operators = ['crossover', 'crossunder', '>=', '<=', '==', '!=', '>', '<'];
+
+    for (let ruleStr of ruleStrings) {
+      ruleStr = ruleStr.trim();
+      if (!ruleStr) continue;
+
+      let foundOp = null;
+      let leftPart = '';
+      let rightPart = '';
+
+      for (const op of operators) {
+        const opIndex = ruleStr.indexOf(op);
+        if (opIndex !== -1) {
+          foundOp = op;
+          leftPart = ruleStr.substring(0, opIndex).trim();
+          rightPart = ruleStr.substring(opIndex + op.length).trim();
+          break;
+        }
+      }
+
+      if (!foundOp) {
+        throw new Error(`Could not find a valid operator in rule: "${ruleStr}"`);
+      }
+
+      if (!ALL_INDICATOR_KEYS.includes(leftPart)) {
+        throw new Error(`Unknown indicator: "${leftPart}"`);
+      }
+
+      let rightType = 'value';
+      let rightValue = null;
+      let rightIndicator = '';
+
+      if (!isNaN(rightPart)) {
+        rightType = 'value';
+        rightValue = parseFloat(rightPart) || 0;
+      } else {
+        rightType = 'indicator';
+        rightIndicator = rightPart;
+        if (!ALL_INDICATOR_KEYS.includes(rightIndicator)) {
+          throw new Error(`Unknown indicator: "${rightIndicator}"`);
+        }
+      }
+
+      rules.push({
+        timeframe: '5m',
+        leftIndicator: leftPart,
+        operator: foundOp,
+        rightType,
+        rightValue: rightValue !== null ? String(rightValue) : undefined,
+        rightIndicator
+      });
+    }
+    return rules;
+  };
+
+  const getBacktestTokens = (text) => {
+    const regex = /(\(|\)|\+|-|\*|\/|[^\s()+\-*/]+)/g;
+    let match;
+    const tokens = [];
+    let idx = 0;
+    while ((match = regex.exec(text)) !== null) {
+      const start = match.index;
+      const end = regex.lastIndex;
+      const raw = match[0];
+      const isKeyword = ['and', 'or', 'crossover', 'crossunder'].includes(raw.toLowerCase());
+      const isOperator = ['+', '-', '*', '/', '>', '<', '>=', '<=', '==', '!='].includes(raw);
+      const isParen = ['(', ')'].includes(raw);
+      let invalid = false;
+      if (!isKeyword && !isOperator && !isParen && isNaN(raw)) {
+        invalid = !ALL_INDICATOR_KEYS.includes(raw);
+      }
+      tokens.push({ idx, raw, start, end, invalid });
+      idx++;
+    }
+    return tokens;
+  };
+
+  const handleToggleGroupMode = (type, gIdx, mode) => {
+    const list = type === 'buy' ? buyConditions : sellConditions;
+    const setter = type === 'buy' ? setBuyConditions : setSellConditions;
+    const updated = [...list];
+    const group = updated[gIdx];
+
+    if (mode === 'text') {
+      const textFormula = convertGroupRulesToString(group.rules);
+      updated[gIdx] = {
+        ...group,
+        inputMode: 'text',
+        textFormula
+      };
+    } else {
+      let rules = group.rules || [];
+      try {
+        if (group.textFormula) {
+          rules = parseGroupTextFormula(group.textFormula);
+        }
+      } catch (err) {
+        alert(`Warning: Could not parse text formula back to rules list. Error: ${err.message}`);
+      }
+      updated[gIdx] = {
+        ...group,
+        inputMode: 'dropdown',
+        rules
+      };
+    }
+    setter(updated);
+  };
+
+  const handleGroupTextChange = (type, gIdx, val) => {
+    const list = type === 'buy' ? buyConditions : sellConditions;
+    const setter = type === 'buy' ? setBuyConditions : setSellConditions;
+    const updated = [...list];
+    updated[gIdx] = {
+      ...updated[gIdx],
+      textFormula: val
+    };
+    setter(updated);
+  };
+
+  const handleApplyGroupAutocomplete = (sug, token, type, gIdx) => {
+    const list = type === 'buy' ? buyConditions : sellConditions;
+    const setter = type === 'buy' ? setBuyConditions : setSellConditions;
+    const group = list[gIdx];
+    const formula = group.textFormula || '';
+    const before = formula.substring(0, token.start);
+    const after = formula.substring(token.end);
+    const newText = before + sug + after;
+
+    const updated = [...list];
+    updated[gIdx] = {
+      ...group,
+      textFormula: newText
+    };
+    setter(updated);
+
+    const newCaretPos = token.start + sug.length;
+    setActiveCaretPos(newCaretPos);
+    setTimeout(() => {
+      const inp = document.getElementById(`formula-input-${type}-${gIdx}`);
+      if (inp) {
+        inp.focus();
+        inp.setSelectionRange(newCaretPos, newCaretPos);
+      }
+    }, 10);
+  };
+
   const runBacktest = async () => {
     if (!selectedId) return alert('Please select or create a watchlist first.');
 
-    const totalBuyRules = buyConditions.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
-    const totalSellRules = sellConditions.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
-    if (totalBuyRules === 0 && totalSellRules === 0) {
+    const hasBuy = buyConditions.some(g => g.inputMode === 'text' ? !!g.textFormula?.trim() : g.rules?.length > 0);
+    const hasSell = sellConditions.some(g => g.inputMode === 'text' ? !!g.textFormula?.trim() : g.rules?.length > 0);
+    if (!hasBuy && !hasSell) {
       return alert('Please configure at least one buy or sell rule.');
     }
 
     setLoading(true);
     setResults([]);
     try {
-      const cleanBuy = buyConditions.map(g => ({
-        ...g,
-        rules: (g.rules || []).map(c => ({
-          ...c,
-          rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
-          rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
-        }))
-      }));
-      const cleanSell = sellConditions.map(g => ({
-        ...g,
-        rules: (g.rules || []).map(c => ({
-          ...c,
-          rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
-          rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
-        })),
-        sellPct: parseFloat(g.sellPct) || 100
-      }));
+      const cleanBuy = buyConditions.map(g => {
+        let rules = g.rules || [];
+        if (g.inputMode === 'text') {
+          rules = parseGroupTextFormula(g.textFormula || '');
+        }
+        return {
+          ...g,
+          rules: rules.map(c => ({
+            ...c,
+            rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
+            rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+          }))
+        };
+      });
+      const cleanSell = sellConditions.map(g => {
+        let rules = g.rules || [];
+        if (g.inputMode === 'text') {
+          rules = parseGroupTextFormula(g.textFormula || '');
+        }
+        return {
+          ...g,
+          rules: rules.map(c => ({
+            ...c,
+            rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
+            rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+          })),
+          sellPct: parseFloat(g.sellPct) || 100
+        };
+      });
 
       const { data } = await api.post('/backtest', {
         watchlistId: selectedId,
@@ -597,42 +771,152 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
               {buyConditions.length === 0 && (
                 <p className="text-[10px] text-slate-500 italic text-center py-20">No buy groups set. Click "Add Group (OR)" above.</p>
               )}
-              {buyConditions.map((group, gIdx) => (
-                <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                    <span className="text-[9px] font-black uppercase text-emerald-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
-                    <button
-                      type="button" onClick={() => handleRemoveGroup('buy', gIdx)}
-                      className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
-                  
-                  <div className="space-y-1.5">
-                    {(group.rules || []).map((cond, idx) => (
-                      <ConditionRow
-                        key={idx} cond={cond} groupIndex={gIdx} idx={idx} type="buy"
-                        onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
-                        inputCls={inputCls} inputStyle={inputStyle}
-                      />
-                    ))}
-                    {(!group.rules || group.rules.length === 0) && (
-                      <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+              {buyConditions.map((group, gIdx) => {
+                const type = 'buy';
+                const groupTokens = getBacktestTokens(group.textFormula || '');
+                const activeToken = groupTokens.find(t => activeCaretPos >= t.start && activeCaretPos <= t.end);
+                const isEditingThis = activeGroupInput && activeGroupInput.type === type && activeGroupInput.gIdx === gIdx;
+                
+                let groupSuggestions = [];
+                if (isEditingThis && activeToken) {
+                  const query = activeToken.raw;
+                  if (query && query.length >= 1 && !['(', ')', 'and', 'or', 'crossover', 'crossunder', '>', '<', '>=', '<=', '==', '!='].includes(query.toLowerCase()) && isNaN(query)) {
+                    groupSuggestions = ALL_INDICATOR_KEYS.filter(key => key.toLowerCase().includes(query.toLowerCase()) && key.toLowerCase() !== query.toLowerCase()).slice(0, 5);
+                  }
+                }
+
+                return (
+                  <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 gap-2">
+                      <span className="text-[9px] font-black uppercase text-emerald-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
+                      <div className="flex items-center gap-2">
+                        {/* Mode Switcher Segment */}
+                        <div className="flex items-center gap-0.5 bg-slate-900/40 p-0.5 rounded-lg border border-slate-850">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroupMode(type, gIdx, 'dropdown')}
+                            className={`px-1.5 py-0.5 text-[8px] font-black uppercase rounded cursor-pointer transition-colors ${group.inputMode !== 'text' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                          >
+                            Pills
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroupMode(type, gIdx, 'text')}
+                            className={`px-1.5 py-0.5 text-[8px] font-black uppercase rounded cursor-pointer transition-colors ${group.inputMode === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                          >
+                            Text
+                          </button>
+                        </div>
+                        <button
+                          type="button" onClick={() => handleRemoveGroup(type, gIdx)}
+                          className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {group.inputMode === 'text' ? (
+                      <div className="space-y-2">
+                        <input
+                          id={`formula-input-${type}-${gIdx}`}
+                          type="text"
+                          placeholder="e.g. ema20 > ema50 AND rsi14 < 30"
+                          value={group.textFormula || ''}
+                          onChange={(e) => {
+                            handleGroupTextChange(type, gIdx, e.target.value);
+                            setActiveGroupInput({ type, gIdx });
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                          }}
+                          onKeyUp={(e) => {
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                            setActiveGroupInput({ type, gIdx });
+                          }}
+                          onMouseUp={(e) => {
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                            setActiveGroupInput({ type, gIdx });
+                          }}
+                          className="w-full border rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-indigo-500"
+                          style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                        />
+
+                        {/* Autocomplete Suggestions */}
+                        {groupSuggestions.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5 p-2 bg-indigo-950/20 border border-indigo-900/30 rounded-xl animate-fade-in">
+                            <span className="text-[8px] font-black uppercase text-indigo-400 mr-1 select-none">Suggestions:</span>
+                            {groupSuggestions.map(sug => (
+                              <button
+                                key={sug}
+                                type="button"
+                                onClick={() => handleApplyGroupAutocomplete(sug, activeToken, type, gIdx)}
+                                className="px-2 py-0.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 border border-indigo-500/20 hover:border-indigo-500/40 text-[9px] font-black rounded cursor-pointer transition-all"
+                              >
+                                {sug}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Live Highlight Preview */}
+                        <div className="flex flex-wrap items-center gap-1.5 p-2 min-h-[40px] rounded-lg border border-dashed"
+                             style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
+                          {groupTokens.map((token, tIdx) => {
+                            const isEditing = activeCaretPos >= token.start && activeCaretPos <= token.end;
+                            let bgStyle = "bg-slate-800/40 text-slate-400 border border-slate-700/30";
+                            
+                            if (['(', ')'].includes(token.raw)) {
+                              bgStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
+                            } else if (['+', '-', '*', '/', '>', '<', '>=', '<=', '==', '!=', 'crossover', 'crossunder', 'and', 'or'].includes(token.raw.toLowerCase())) {
+                              bgStyle = "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30";
+                            } else {
+                              if (!isNaN(token.raw)) {
+                                bgStyle = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono";
+                              } else {
+                                bgStyle = token.invalid && !isEditing
+                                  ? "bg-rose-500/25 text-rose-300 border border-rose-500/50"
+                                  : "bg-sky-500/10 text-sky-400 border border-sky-500/30 font-bold";
+                              }
+                            }
+                            return (
+                              <span key={tIdx} className={`px-1.5 py-0.5 rounded text-[10px] select-none ${bgStyle}`}>
+                                {token.raw}
+                              </span>
+                            );
+                          })}
+                          {groupTokens.length === 0 && (
+                            <span className="text-[9px] text-slate-500 italic select-none">{"Type a formula (e.g. ema20 > ema50 AND rsi14 < 30)"}</span>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-1.5">
+                          {(group.rules || []).map((cond, idx) => (
+                            <ConditionRow
+                              key={idx} cond={cond} groupIndex={gIdx} idx={idx} type={type}
+                              onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
+                              inputCls={inputCls} inputStyle={inputStyle}
+                            />
+                          ))}
+                          {(!group.rules || group.rules.length === 0) && (
+                            <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button" onClick={() => handleAddRuleRow(type, gIdx)}
+                          className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
+                        >
+                          <Plus size={10} /> Add Rule (AND)
+                        </button>
+                      </>
                     )}
                   </div>
-
-                  <button
-                    type="button" onClick={() => handleAddRuleRow('buy', gIdx)}
-                    className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
-                  >
-                    <Plus size={10} /> Add Rule (AND)
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
-
+ 
           {/* Sell Conditions */}
           <div className="border border-rose-900/30 rounded-xl p-4 bg-rose-950/5 flex flex-col h-[400px] overflow-hidden">
             <div className="flex items-center justify-between mb-3 shrink-0">
@@ -649,55 +933,162 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
               {sellConditions.length === 0 && (
                 <p className="text-[10px] text-slate-500 italic text-center py-20">No sell groups set. Click "Add Group (OR)" above.</p>
               )}
-              {sellConditions.map((group, gIdx) => (
-                <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                    <span className="text-[9px] font-black uppercase text-rose-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1">
-                        <span className="text-[8px] font-black uppercase text-slate-400">Sell %:</span>
+              {sellConditions.map((group, gIdx) => {
+                const type = 'sell';
+                const groupTokens = getBacktestTokens(group.textFormula || '');
+                const activeToken = groupTokens.find(t => activeCaretPos >= t.start && activeCaretPos <= t.end);
+                const isEditingThis = activeGroupInput && activeGroupInput.type === type && activeGroupInput.gIdx === gIdx;
+                
+                let groupSuggestions = [];
+                if (isEditingThis && activeToken) {
+                  const query = activeToken.raw;
+                  if (query && query.length >= 1 && !['(', ')', 'and', 'or', 'crossover', 'crossunder', '>', '<', '>=', '<=', '==', '!='].includes(query.toLowerCase()) && isNaN(query)) {
+                    groupSuggestions = ALL_INDICATOR_KEYS.filter(key => key.toLowerCase().includes(query.toLowerCase()) && key.toLowerCase() !== query.toLowerCase()).slice(0, 5);
+                  }
+                }
+
+                return (
+                  <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
+                    <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-1.5 gap-2">
+                      <span className="text-[9px] font-black uppercase text-rose-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[8px] font-black uppercase text-slate-400">Sell %:</span>
+                          <input
+                            type="number" min="1" max="100"
+                            value={group.sellPct ?? 100}
+                            onChange={(e) => handleGroupSellPctChange(gIdx, e.target.value)}
+                            className="w-11 text-[10px] border rounded px-1 text-right focus:outline-none"
+                            style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                          />
+                        </div>
+                        {/* Mode Switcher Segment */}
+                        <div className="flex items-center gap-0.5 bg-slate-900/40 p-0.5 rounded-lg border border-slate-850">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroupMode(type, gIdx, 'dropdown')}
+                            className={`px-1.5 py-0.5 text-[8px] font-black uppercase rounded cursor-pointer transition-colors ${group.inputMode !== 'text' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                          >
+                            Pills
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroupMode(type, gIdx, 'text')}
+                            className={`px-1.5 py-0.5 text-[8px] font-black uppercase rounded cursor-pointer transition-colors ${group.inputMode === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                          >
+                            Text
+                          </button>
+                        </div>
+                        <button
+                          type="button" onClick={() => handleRemoveGroup(type, gIdx)}
+                          className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {group.inputMode === 'text' ? (
+                      <div className="space-y-2">
                         <input
-                          type="number" min="1" max="100"
-                          value={group.sellPct ?? 100}
-                          onChange={(e) => handleGroupSellPctChange(gIdx, e.target.value)}
-                          className="w-11 text-[10px] border rounded px-1 text-right focus:outline-none"
+                          id={`formula-input-${type}-${gIdx}`}
+                          type="text"
+                          placeholder="e.g. ema20 > ema50 AND rsi14 < 30"
+                          value={group.textFormula || ''}
+                          onChange={(e) => {
+                            handleGroupTextChange(type, gIdx, e.target.value);
+                            setActiveGroupInput({ type, gIdx });
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                          }}
+                          onKeyUp={(e) => {
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                            setActiveGroupInput({ type, gIdx });
+                          }}
+                          onMouseUp={(e) => {
+                            setActiveCaretPos(e.target.selectionStart || 0);
+                            setActiveGroupInput({ type, gIdx });
+                          }}
+                          className="w-full border rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-indigo-500"
                           style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
                         />
+
+                        {/* Autocomplete Suggestions */}
+                        {groupSuggestions.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5 p-2 bg-indigo-950/20 border border-indigo-900/30 rounded-xl animate-fade-in">
+                            <span className="text-[8px] font-black uppercase text-indigo-400 mr-1 select-none">Suggestions:</span>
+                            {groupSuggestions.map(sug => (
+                              <button
+                                key={sug}
+                                type="button"
+                                onClick={() => handleApplyGroupAutocomplete(sug, activeToken, type, gIdx)}
+                                className="px-2 py-0.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 border border-indigo-500/20 hover:border-indigo-500/40 text-[9px] font-black rounded cursor-pointer transition-all"
+                              >
+                                {sug}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Live Highlight Preview */}
+                        <div className="flex flex-wrap items-center gap-1.5 p-2 min-h-[40px] rounded-lg border border-dashed"
+                             style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
+                          {groupTokens.map((token, tIdx) => {
+                            const isEditing = activeCaretPos >= token.start && activeCaretPos <= token.end;
+                            let bgStyle = "bg-slate-800/40 text-slate-400 border border-slate-700/30";
+                            
+                            if (['(', ')'].includes(token.raw)) {
+                              bgStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
+                            } else if (['+', '-', '*', '/', '>', '<', '>=', '<=', '==', '!=', 'crossover', 'crossunder', 'and', 'or'].includes(token.raw.toLowerCase())) {
+                              bgStyle = "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30";
+                            } else {
+                              if (!isNaN(token.raw)) {
+                                bgStyle = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono";
+                              } else {
+                                bgStyle = token.invalid && !isEditing
+                                  ? "bg-rose-500/25 text-rose-300 border border-rose-500/50"
+                                  : "bg-sky-500/10 text-sky-400 border border-sky-500/30 font-bold";
+                              }
+                            }
+                            return (
+                              <span key={tIdx} className={`px-1.5 py-0.5 rounded text-[10px] select-none ${bgStyle}`}>
+                                {token.raw}
+                              </span>
+                            );
+                          })}
+                          {groupTokens.length === 0 && (
+                            <span className="text-[9px] text-slate-500 italic select-none">{"Type a formula (e.g. ema20 > ema50 AND rsi14 < 30)"}</span>
+                          )}
+                        </div>
                       </div>
-                      <button
-                        type="button" onClick={() => handleRemoveGroup('sell', gIdx)}
-                        className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-1.5">
-                    {(group.rules || []).map((cond, idx) => (
-                      <ConditionRow
-                        key={idx} cond={cond} groupIndex={gIdx} idx={idx} type="sell"
-                        onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
-                        inputCls={inputCls} inputStyle={inputStyle}
-                      />
-                    ))}
-                    {(!group.rules || group.rules.length === 0) && (
-                      <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+                    ) : (
+                      <>
+                        <div className="space-y-1.5">
+                          {(group.rules || []).map((cond, idx) => (
+                            <ConditionRow
+                              key={idx} cond={cond} groupIndex={gIdx} idx={idx} type={type}
+                              onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
+                              inputCls={inputCls} inputStyle={inputStyle}
+                            />
+                          ))}
+                          {(!group.rules || group.rules.length === 0) && (
+                            <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button" onClick={() => handleAddRuleRow(type, gIdx)}
+                          className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
+                        >
+                          <Plus size={10} /> Add Rule (AND)
+                        </button>
+                      </>
                     )}
                   </div>
-
-                  <button
-                    type="button" onClick={() => handleAddRuleRow('sell', gIdx)}
-                    className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
-                  >
-                    <Plus size={10} /> Add Rule (AND)
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
-
       </div>
 
       {/* ── Results Dashboard ── */}
