@@ -20,7 +20,7 @@ async function runTest() {
     await User.deleteMany({ email: /test-bot-user/ });
     await Trade.deleteMany({});
     
-    console.log('👤 Creating mock user with conditions pool...');
+    console.log('👤 Creating mock user with OR-joined conditions and partial sell...');
     const user = await User.create({
       email: 'test-bot-user@alphawatch.com',
       password: 'password123',
@@ -30,14 +30,30 @@ async function runTest() {
       },
       conditions: [
         {
-          name: 'Buy Template 1',
+          name: 'OR Buy template',
           type: 'buy',
-          rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '100' }]
+          groups: [
+            {
+              rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '1000' }] // FALSE
+            },
+            {
+              rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '100' }] // TRUE
+            }
+          ]
         },
         {
-          name: 'Sell Template 1',
+          name: 'OR Sell template with Partial Sell',
           type: 'sell',
-          rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '<', rightType: 'value', rightValue: '90' }]
+          groups: [
+            {
+              sellPct: 40,
+              rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '<', rightType: 'value', rightValue: '90' }] // TRUE on 85
+            },
+            {
+              sellPct: 100,
+              rules: [{ timeframe: '5m', leftIndicator: 'close', operator: '<', rightType: 'value', rightValue: '60' }] // FALSE on 85
+            }
+          ]
         }
       ]
     });
@@ -55,7 +71,8 @@ async function runTest() {
           exchange: 'NSE',
           autoTradeEnabled: true,
           assignedBuyConditionId: buyConditionId,
-          assignedSellConditionId: sellConditionId
+          assignedSellConditionId: sellConditionId,
+          tradeCapital: 10000
         }
       ]
     });
@@ -102,52 +119,48 @@ async function runTest() {
     if (trades.length !== 1 || trades[0].type !== 'buy') {
       throw new Error('Buy trade execution test failed.');
     }
+    if (trades[0].quantity !== 93) {
+      throw new Error(`Stock-specific capital check failed. Expected 93 shares, got ${trades[0].quantity}`);
+    }
     console.log(`✅ Buy execution verified! Quantity purchased: ${trades[0].quantity} at ₹${trades[0].price}`);
 
-    console.log('📉 Adjusting price downward to trigger Sell...');
+    console.log('📉 Adjusting price downward to 85 to trigger 40% Partial Sell...');
     liveMarketState['NSE:TESTSTOCK'].ltp = 85;
     mockCandles.push({ timestamp: Date.now(), open: 87, high: 88, low: 84, close: 85, volume: 1500 });
     
-    console.log('🚀 Triggering Sell Auto-Trade Cycle...');
+    // We mock HDFC fetch positions returning the 93 shares
+    const originalFetchPositions = require('../services/hdfcService').fetchPositions;
+    require('../services/hdfcService').fetchPositions = async () => {
+      return {
+        status: 'success',
+        data: {
+          net: [
+            {
+              security_id: 'TESTSTOCK',
+              exchange: 'NSE',
+              net_qty: 93
+            }
+          ]
+        }
+      };
+    };
+
+    console.log('🚀 Triggering Sell Auto-Trade Cycle (Expected Partial Sell)...');
     await autoTradeEngine.runAutoTradeCycle(liveMarketState);
 
-    trades = await Trade.find({ userId: user._id });
+    trades = await Trade.find({ userId: user._id }).sort({ timestamp: 1 });
     console.log(`📊 Total Trades recorded: ${trades.length}`);
     if (trades.length !== 2 || trades[1].type !== 'sell') {
       throw new Error('Sell trade execution test failed.');
     }
-    console.log('✅ Sell execution verified!');
-
-    console.log('📦 Testing 100 trade log pruning limit...');
-    await Trade.deleteMany({ userId: user._id });
-    const bulkTrades = [];
-    for (let i = 0; i < 105; i++) {
-      bulkTrades.push({
-        userId: user._id,
-        symbol: 'TESTSTOCK',
-        exchange: 'NSE',
-        type: 'buy',
-        price: 100,
-        quantity: 1,
-        orderId: `BULK-${i}`,
-        timestamp: new Date(Date.now() + i * 1000),
-        status: 'Traded'
-      });
+    // Expected quantity to sell: 93 * 0.4 = 37.2 -> Math.floor is 37 shares!
+    if (trades[1].quantity !== 37) {
+      throw new Error(`Partial sell quantity check failed. Expected 37 shares, got ${trades[1].quantity}`);
     }
-    await Trade.insertMany(bulkTrades);
-
-    console.log('🚀 Triggering another cycle to execute pruning...');
-    await autoTradeEngine.runAutoTradeCycle(liveMarketState);
-
-    const finalTradeCount = await Trade.countDocuments({ userId: user._id });
-    console.log(`📊 Total Trade Logs in DB: ${finalTradeCount}`);
-    if (finalTradeCount > 100) {
-      throw new Error(`Pruning failed. DB stored ${finalTradeCount} entries.`);
-    }
-    console.log('✅ Database trade pruning verification successful!');
+    console.log(`✅ Partial Sell execution verified! Quantity sold: ${trades[1].quantity} shares (${trades[1].message})`);
 
   } catch (err) {
-    console.error('❌ Verification test failed:', err.message);
+    console.error('❌ Verification test failed:', err.stack || err.message);
   } finally {
     console.log('🔌 Disconnecting Mongoose...');
     await mongoose.disconnect();

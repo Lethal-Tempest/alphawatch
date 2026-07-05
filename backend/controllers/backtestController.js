@@ -46,6 +46,19 @@ exports.runBacktest = async (req, res, next) => {
       return res.status(400).json({ error: 'watchlistId, timeframe, initialCapital, buyConditions, and sellConditions are required.' });
     }
 
+    const normalizeConditions = (conds) => {
+      if (!Array.isArray(conds)) return [];
+      return conds.map((c) => {
+        if (c.leftIndicator && !c.rules) {
+          return { rules: [c] };
+        }
+        return c;
+      });
+    };
+
+    const buyGroups = normalizeConditions(buyConditions);
+    const sellGroups = normalizeConditions(sellConditions);
+
     const watchlist = await Watchlist.findById(watchlistId);
     if (!watchlist) {
       return res.status(404).json({ error: 'Watchlist not found.' });
@@ -111,12 +124,23 @@ exports.runBacktest = async (req, res, next) => {
           const indicators = getIndicatorsAt(computed, candles, price, i);
 
           if (!holding) {
-            // Check buy conditions
-            let buyPassed = buyConditions.length > 0;
-            for (const cond of buyConditions) {
-              if (!evaluateCondition(cond, indicators)) {
-                buyPassed = false;
-                break;
+            // Check buy conditions (OR-joined rule groups)
+            let buyPassed = false;
+            if (buyGroups.length > 0) {
+              for (const group of buyGroups) {
+                const rules = group.rules || [];
+                if (rules.length === 0) continue;
+                let groupPassed = true;
+                for (const rule of rules) {
+                  if (!evaluateCondition(rule, indicators)) {
+                    groupPassed = false;
+                    break;
+                  }
+                }
+                if (groupPassed) {
+                  buyPassed = true;
+                  break; // OR condition matched
+                }
               }
             }
 
@@ -142,36 +166,56 @@ exports.runBacktest = async (req, res, next) => {
               enrichedCandles[i].transactionType = 'buy';
             }
           } else {
-            // Check sell conditions
+            // Check sell conditions (OR-joined groups with partial sell percentages)
             if (i > lastTradeCandleIndex) {
-              let sellPassed = sellConditions.length > 0;
-              for (const cond of sellConditions) {
-                if (!evaluateCondition(cond, indicators)) {
-                  sellPassed = false;
-                  break;
+              let triggeredGroup = null;
+              if (sellGroups.length > 0) {
+                for (const group of sellGroups) {
+                  const rules = group.rules || [];
+                  if (rules.length === 0) continue;
+                  let groupPassed = true;
+                  for (const rule of rules) {
+                    if (!evaluateCondition(rule, indicators)) {
+                      groupPassed = false;
+                      break;
+                    }
+                  }
+                  if (groupPassed) {
+                    triggeredGroup = group;
+                    break; // Execute first matching group
+                  }
                 }
               }
 
-              if (sellPassed) {
-                const sellValueRaw = position * price;
-                const transactionCost = sellValueRaw * (txCostPct / 100);
-                const sellValueNet = sellValueRaw - transactionCost;
+              if (triggeredGroup) {
+                const sellPct = parseFloat(triggeredGroup.sellPct) || 100;
+                const sharesToSell = position * (sellPct / 100);
 
-                capital = sellValueNet;
-                position = 0;
-                holding = false;
-                lastTradeCandleIndex = i;
+                if (sharesToSell > 0) {
+                  const sellValueRaw = sharesToSell * price;
+                  const transactionCost = sellValueRaw * (txCostPct / 100);
+                  const sellValueNet = sellValueRaw - transactionCost;
 
-                trades.push({
-                  type: 'sell',
-                  index: i,
-                  price,
-                  shares: position,
-                  cost: transactionCost
-                });
+                  capital += sellValueNet;
+                  position = position - sharesToSell;
+                  lastTradeCandleIndex = i;
 
-                enrichedCandles[i].transactionPrice = price.toFixed(2);
-                enrichedCandles[i].transactionType = 'sell';
+                  if (position < 0.0001) {
+                    position = 0;
+                    holding = false;
+                  }
+
+                  trades.push({
+                    type: sellPct < 100 ? `sell (${sellPct}%)` : 'sell',
+                    index: i,
+                    price,
+                    shares: sharesToSell,
+                    cost: transactionCost
+                  });
+
+                  enrichedCandles[i].transactionPrice = price.toFixed(2);
+                  enrichedCandles[i].transactionType = sellPct < 100 ? `sell (${sellPct}%)` : 'sell';
+                }
               }
             }
           }

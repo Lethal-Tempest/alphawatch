@@ -262,33 +262,62 @@ export default function AutoTradeDashboard() {
   };
 
   // 6. Manage rules of the condition currently being edited
-  const handleAddRuleRow = () => {
+  const handleAddGroup = () => {
     if (!editingCond) return;
     setEditingCond({
       ...editingCond,
-      rules: [
-        ...editingCond.rules,
-        { timeframe: '5m', leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '', rightIndicator: 'close' }
+      groups: [
+        ...(editingCond.groups || []),
+        { rules: [], sellPct: 100 }
       ]
     });
   };
 
-  const handleRemoveRuleRow = (index) => {
+  const handleRemoveGroup = (groupIndex) => {
     if (!editingCond) return;
     setEditingCond({
       ...editingCond,
-      rules: editingCond.rules.filter((_, i) => i !== index)
+      groups: (editingCond.groups || []).filter((_, idx) => idx !== groupIndex)
     });
   };
 
-  const handleRuleRowChange = (index, field, value) => {
+  const handleGroupSellPctChange = (groupIndex, value) => {
     if (!editingCond) return;
-    const updatedRules = [...editingCond.rules];
-    updatedRules[index] = { ...updatedRules[index], [field]: value };
-    setEditingCond({
-      ...editingCond,
-      rules: updatedRules
-    });
+    const updated = [...(editingCond.groups || [])];
+    updated[groupIndex] = { ...updated[groupIndex], sellPct: parseFloat(value) || 0 };
+    setEditingCond({ ...editingCond, groups: updated });
+  };
+
+  const handleAddRuleRow = (groupIndex) => {
+    if (!editingCond) return;
+    const updated = [...(editingCond.groups || [])];
+    updated[groupIndex] = {
+      ...updated[groupIndex],
+      rules: [
+        ...(updated[groupIndex].rules || []),
+        { timeframe: '5m', leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '', rightIndicator: 'close' }
+      ]
+    };
+    setEditingCond({ ...editingCond, groups: updated });
+  };
+
+  const handleRemoveRuleRow = (groupIndex, ruleIndex) => {
+    if (!editingCond) return;
+    const updated = [...(editingCond.groups || [])];
+    updated[groupIndex] = {
+      ...updated[groupIndex],
+      rules: (updated[groupIndex].rules || []).filter((_, idx) => idx !== ruleIndex)
+    };
+    setEditingCond({ ...editingCond, groups: updated });
+  };
+
+  const handleRuleRowChange = (groupIndex, ruleIndex, field, value) => {
+    if (!editingCond) return;
+    const updated = [...(editingCond.groups || [])];
+    const rules = [...updated[groupIndex].rules];
+    rules[ruleIndex] = { ...rules[ruleIndex], [field]: value };
+    updated[groupIndex] = { ...updated[groupIndex], rules };
+    setEditingCond({ ...editingCond, groups: updated });
   };
 
   const handleSaveConditionRules = async () => {
@@ -297,12 +326,12 @@ export default function AutoTradeDashboard() {
     try {
       const res = await api.put(`/trade/conditions/${editingCond._id}`, {
         name: editingCond.name,
-        rules: editingCond.rules
+        groups: editingCond.groups
       });
       if (res.data?.success) {
         setConditionsPool(res.data.conditions);
         setEditingCond(null);
-        alert('Condition rules saved successfully.');
+        alert('Condition groups saved successfully.');
       }
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to save condition rules.');
@@ -474,13 +503,18 @@ export default function AutoTradeDashboard() {
                           <div>
                             <span className="text-xs font-black text-slate-200">{cond.name}</span>
                             <span className="text-[9px] text-slate-500 block">
-                              {cond.rules?.length || 0} rule criteria rules configured
+                              {cond.groups ? cond.groups.reduce((acc, g) => acc + (g.rules?.length || 0), 0) : (cond.rules?.length || 0)} criteria rules configured
                             </span>
                           </div>
 
                           <div className="flex items-center gap-1.5">
                             <button
-                              onClick={() => setEditingCond(cond)}
+                              onClick={() => {
+                                const groups = cond.groups && cond.groups.length > 0
+                                  ? JSON.parse(JSON.stringify(cond.groups))
+                                  : [{ rules: JSON.parse(JSON.stringify(cond.rules || [])), sellPct: 100 }];
+                                setEditingCond({ ...cond, groups });
+                              }}
                               className="p-1.5 rounded-lg border text-slate-500 hover:text-indigo-400 cursor-pointer hover:bg-indigo-500/10 transition-colors"
                               style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}
                               title="Edit Rules"
@@ -517,7 +551,7 @@ export default function AutoTradeDashboard() {
                     Editing: "{editingCond.name}"
                   </h3>
                   <p className="text-[9px] text-slate-500">
-                    Configure the logical criteria rules which must evaluate to true (logical AND) for this strategy template.
+                    Configure condition groups (joined by OR logic) containing rule constraints (joined by AND logic).
                   </p>
                 </div>
                 <button
@@ -528,117 +562,173 @@ export default function AutoTradeDashboard() {
                 </button>
               </div>
 
-              {/* Rules List */}
-              <div className="space-y-3">
-                {editingCond.rules.map((rule, idx) => (
-                  <div key={idx} className="flex flex-wrap items-center gap-2 border-b last:border-0 pb-3 last:pb-0" style={{ borderColor: 'var(--border-base)' }}>
-                    
-                    {/* Timeframe selector */}
-                    <div className="w-[75px]">
-                      <select
-                        value={rule.timeframe}
-                        onChange={e => handleRuleRowChange(idx, 'timeframe', e.target.value)}
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
-                        style={selectStyle}
-                      >
-                        {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Left Indicator */}
-                    <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
-                      <span className="text-[9px] font-bold px-1 text-slate-400 uppercase">LHS:</span>
-                      <select
-                        value={rule.leftIndicator}
-                        onChange={e => handleRuleRowChange(idx, 'leftIndicator', e.target.value)}
-                        className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer max-w-[120px]"
-                        style={{ color: 'var(--text-primary)' }}
-                      >
-                        {INDICATOR_GROUPS.map(g => (
-                          <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
-                            {g.options.map(ind => (
-                              <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
-                                {ind.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Operator */}
-                    <div className="w-[85px]">
-                      <select
-                        value={rule.operator}
-                        onChange={e => handleRuleRowChange(idx, 'operator', e.target.value)}
-                        className="w-full border rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
-                        style={selectStyle}
-                      >
-                        {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Right Hand Side */}
-                    <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
-                      <select
-                        value={rule.rightType}
-                        onChange={e => {
-                          handleRuleRowChange(idx, 'rightType', e.target.value);
-                          if (e.target.value === 'value') {
-                            handleRuleRowChange(idx, 'rightValue', '0');
-                          } else {
-                            handleRuleRowChange(idx, 'rightIndicator', 'close');
-                          }
-                        }}
-                        className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
-                        style={{ color: 'var(--text-primary)' }}
-                      >
-                        <option value="value">Value</option>
-                        <option value="indicator">Indicator</option>
-                      </select>
-
-                      {rule.rightType === 'value' ? (
-                        <input
-                          type="number" step="any" required placeholder="0.0"
-                          value={rule.rightValue ?? ''}
-                          onChange={e => handleRuleRowChange(idx, 'rightValue', e.target.value)}
-                          className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none"
-                          style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
-                        />
-                      ) : (
-                        <select
-                          value={rule.rightIndicator}
-                          onChange={e => handleRuleRowChange(idx, 'rightIndicator', e.target.value)}
-                          className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer max-w-[120px]"
-                          style={{ color: 'var(--text-primary)' }}
+              {/* Groups List */}
+              <div className="space-y-6">
+                {(editingCond.groups || []).map((group, gIdx) => (
+                  <div key={gIdx} className="border border-slate-800 rounded-xl p-4 bg-slate-900/20 space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-black rounded text-[9px] uppercase">
+                          Condition Group {gIdx + 1}
+                        </span>
+                        {gIdx > 0 && (
+                          <span className="text-[10px] text-indigo-400/80 font-black uppercase">
+                            [OR]
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-3">
+                        {editingCond.type === 'sell' && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-black text-slate-400 uppercase">Sell Percentage:</span>
+                            <input
+                              type="number" min="1" max="100"
+                              value={group.sellPct ?? 100}
+                              onChange={(e) => handleGroupSellPctChange(gIdx, e.target.value)}
+                              className="w-14 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none"
+                              style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                            />
+                            <span className="text-xs text-slate-500 font-bold">%</span>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGroup(gIdx)}
+                          className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
+                          title="Remove Group"
                         >
-                          {INDICATOR_GROUPS.map(g => (
-                            <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
-                              {g.options.map(ind => (
-                                <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
-                                  {ind.label}
-                                </option>
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Rules inside group */}
+                    <div className="space-y-3">
+                      {(group.rules || []).map((rule, rIdx) => (
+                        <div key={rIdx} className="flex flex-wrap items-center gap-2 border-b last:border-0 pb-3 last:pb-0" style={{ borderColor: 'var(--border-base)' }}>
+                          
+                          {/* Timeframe selector */}
+                          <div className="w-[75px]">
+                            <select
+                              value={rule.timeframe}
+                              onChange={e => handleRuleRowChange(gIdx, rIdx, 'timeframe', e.target.value)}
+                              className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
+                              style={selectStyle}
+                            >
+                              {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+                            </select>
+                          </div>
+
+                          {/* Left Indicator */}
+                          <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
+                            <span className="text-[9px] font-bold px-1 text-slate-400 uppercase">LHS:</span>
+                            <select
+                              value={rule.leftIndicator}
+                              onChange={e => handleRuleRowChange(gIdx, rIdx, 'leftIndicator', e.target.value)}
+                              className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer max-w-[120px]"
+                              style={{ color: 'var(--text-primary)' }}
+                            >
+                              {INDICATOR_GROUPS.map(g => (
+                                <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                                  {g.options.map(ind => (
+                                    <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                                      {ind.label}
+                                    </option>
+                                  ))}
+                                </optgroup>
                               ))}
-                            </optgroup>
-                          ))}
-                        </select>
+                            </select>
+                          </div>
+
+                          {/* Operator */}
+                          <div className="w-[85px]">
+                            <select
+                              value={rule.operator}
+                              onChange={e => handleRuleRowChange(gIdx, rIdx, 'operator', e.target.value)}
+                              className="w-full border rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:border-indigo-500 font-bold cursor-pointer"
+                              style={selectStyle}
+                            >
+                              {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
+                            </select>
+                          </div>
+
+                          {/* Right Hand Side */}
+                          <div className="flex items-center gap-1.5 border rounded-lg p-1" style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-elevated)' }}>
+                            <select
+                              value={rule.rightType}
+                              onChange={e => {
+                                handleRuleRowChange(gIdx, rIdx, 'rightType', e.target.value);
+                                if (e.target.value === 'value') {
+                                  handleRuleRowChange(gIdx, rIdx, 'rightValue', '0');
+                                } else {
+                                  handleRuleRowChange(gIdx, rIdx, 'rightIndicator', 'close');
+                                }
+                              }}
+                              className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer"
+                              style={{ color: 'var(--text-primary)' }}
+                            >
+                              <option value="value">Value</option>
+                              <option value="indicator">Indicator</option>
+                            </select>
+
+                            {rule.rightType === 'value' ? (
+                              <input
+                                type="number" step="any" required placeholder="0.0"
+                                value={rule.rightValue ?? ''}
+                                onChange={e => handleRuleRowChange(gIdx, rIdx, 'rightValue', e.target.value)}
+                                className="w-20 border rounded px-1.5 py-0.5 text-xs text-right focus:outline-none"
+                                style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                              />
+                            ) : (
+                              <select
+                                value={rule.rightIndicator}
+                                onChange={e => handleRuleRowChange(gIdx, rIdx, 'rightIndicator', e.target.value)}
+                                className="border-0 bg-transparent text-xs focus:outline-none cursor-pointer max-w-[120px]"
+                                style={{ color: 'var(--text-primary)' }}
+                              >
+                                {INDICATOR_GROUPS.map(g => (
+                                  <optgroup key={g.label} label={g.label} className="bg-slate-900 text-slate-300 font-bold">
+                                    {g.options.map(ind => (
+                                      <option key={ind.key} value={ind.key} className="bg-slate-950 text-slate-200 font-normal">
+                                        {ind.label}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+
+                          {/* Delete row */}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRuleRow(gIdx, rIdx)}
+                            className="p-1.5 rounded-lg border hover:text-rose-400 cursor-pointer text-slate-500 transition-colors ml-auto sm:ml-0"
+                            style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+
+                      {(!group.rules || group.rules.length === 0) && (
+                        <p className="text-[10px] text-slate-500 italic">No rules defined in this group. Click "+ Add Rule (AND)" below.</p>
                       )}
                     </div>
 
-                    {/* Delete row */}
                     <button
                       type="button"
-                      onClick={() => handleRemoveRuleRow(idx)}
-                      className="p-1.5 rounded-lg border hover:text-rose-400 cursor-pointer text-slate-500 transition-colors ml-auto sm:ml-0"
-                      style={{ borderColor: 'var(--border-base)', background: 'var(--bg-elevated)' }}
+                      onClick={() => handleAddRuleRow(gIdx)}
+                      className="flex items-center gap-1.5 text-[9px] font-black uppercase px-2.5 py-1.5 border border-indigo-500/20 text-indigo-400 bg-indigo-500/5 hover:bg-indigo-500/10 rounded-lg cursor-pointer transition-colors"
                     >
-                      <Trash2 size={12} />
+                      <Plus size={10} /> Add Rule (AND)
                     </button>
                   </div>
                 ))}
 
-                {editingCond.rules.length === 0 && (
-                  <p className="text-[10px] text-slate-500 italic py-2">No rules configured yet. Click "Add Criteria Rule" below.</p>
+                {(editingCond.groups || []).length === 0 && (
+                  <p className="text-[10px] text-slate-500 italic py-2">No condition groups configured yet. Click "+ Add Condition Group (OR)" below.</p>
                 )}
               </div>
 
@@ -646,10 +736,10 @@ export default function AutoTradeDashboard() {
               <div className="flex justify-between items-center pt-2 border-t" style={{ borderColor: 'var(--border-base)' }}>
                 <button
                   type="button"
-                  onClick={handleAddRuleRow}
-                  className="flex items-center gap-1 text-[9px] font-black uppercase px-2.5 py-1.5 border border-indigo-500/20 text-indigo-400 bg-indigo-500/5 hover:bg-indigo-500/10 rounded-lg cursor-pointer transition-colors"
+                  onClick={handleAddGroup}
+                  className="flex items-center gap-1.5 text-[9px] font-black uppercase px-3 py-2 border border-indigo-500/20 text-indigo-400 bg-indigo-500/5 hover:bg-indigo-500/10 rounded-lg cursor-pointer transition-colors"
                 >
-                  <Plus size={10} /> Add Criteria Rule
+                  <Plus size={10} /> Add Condition Group (OR)
                 </button>
 
                 <div className="flex gap-2">

@@ -45,7 +45,8 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
               symbol: stock.symbol,
               exchange: stock.exchange,
               assignedBuyConditionId: stock.assignedBuyConditionId,
-              assignedSellConditionId: stock.assignedSellConditionId
+              assignedSellConditionId: stock.assignedSellConditionId,
+              tradeCapital: stock.tradeCapital
             });
           }
         }
@@ -87,17 +88,34 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
           continue;
         }
 
-        const buyRules = buyCondObj.rules || [];
-        const sellRules = sellCondObj.rules || [];
+        const normalizeGroups = (condObj) => {
+          if (condObj.groups && condObj.groups.length > 0) {
+            return condObj.groups;
+          }
+          if (condObj.rules && condObj.rules.length > 0) {
+            return [{ rules: condObj.rules, sellPct: 100 }];
+          }
+          return [];
+        };
 
-        if (buyRules.length === 0 && sellRules.length === 0) {
+        const buyGroups = normalizeGroups(buyCondObj);
+        const sellGroups = normalizeGroups(sellCondObj);
+
+        const totalBuyRulesCount = buyGroups.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
+        const totalSellRulesCount = sellGroups.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
+
+        if (totalBuyRulesCount === 0 && totalSellRulesCount === 0) {
           continue;
         }
 
         // Collect all unique timeframes referenced in the rules
         const requiredTimeframes = new Set();
-        buyRules.forEach((r) => { if (r.timeframe) requiredTimeframes.add(r.timeframe); });
-        sellRules.forEach((r) => { if (r.timeframe) requiredTimeframes.add(r.timeframe); });
+        buyGroups.forEach((g) => {
+          if (g.rules) g.rules.forEach((r) => { if (r.timeframe) requiredTimeframes.add(r.timeframe); });
+        });
+        sellGroups.forEach((g) => {
+          if (g.rules) g.rules.forEach((r) => { if (r.timeframe) requiredTimeframes.add(r.timeframe); });
+        });
 
         // Fetch indicator candle sets and store evaluation snapshots for each required timeframe
         const indicatorsCache = {};
@@ -168,24 +186,36 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
         const currentQty = isHolding ? positionItem.net_qty : 0;
 
         if (!isHolding) {
-          // Evaluate Buy rules (all-AND)
-          let buyTriggered = buyRules.length > 0;
-          for (const rule of buyRules) {
-            const tfInds = indicatorsCache[rule.timeframe];
-            if (!evaluateCondition(rule, tfInds)) {
-              buyTriggered = false;
-              break;
+          // Evaluate Buy rules (OR-joined groups)
+          let buyTriggered = false;
+          if (buyGroups.length > 0) {
+            for (const group of buyGroups) {
+              const rules = group.rules || [];
+              if (rules.length === 0) continue;
+              let groupPassed = true;
+              for (const rule of rules) {
+                const tfInds = indicatorsCache[rule.timeframe];
+                if (!evaluateCondition(rule, tfInds)) {
+                  groupPassed = false;
+                  break;
+                }
+              }
+              if (groupPassed) {
+                buyTriggered = true;
+                break; // OR condition matched
+              }
             }
           }
 
           if (buyTriggered) {
-            const targetQty = Math.max(1, Math.floor(capital / price));
-            console.log(`[AutoTrade] BUY signal triggered for ${key} at ₹${price} using condition "${buyCondObj.name}". Qty: ${targetQty}`);
-
+            const stockCapital = stock.tradeCapital || capital;
+            const targetQty = Math.max(1, Math.floor(stockCapital / price));
+            console.log(`[AutoTrade] BUY signal triggered for ${key} at ₹${price} using condition "${buyCondObj.name}". Qty: ${targetQty} (Capital: ₹${stockCapital})`);
+            
             const result = await hdfcService.placeOrder(user, stock, 'buy', price, targetQty);
             if (result && result.status === 'success') {
               const orderId = result.data.order_id;
-
+              
               // Record Trade
               await Trade.create({
                 userId: user._id,
@@ -219,20 +249,33 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
             }
           }
         } else {
-          // Evaluate Sell rules (all-AND)
-          let sellTriggered = sellRules.length > 0;
-          for (const rule of sellRules) {
-            const tfInds = indicatorsCache[rule.timeframe];
-            if (!evaluateCondition(rule, tfInds)) {
-              sellTriggered = false;
-              break;
+          // Evaluate Sell rules (OR-joined groups with partial sell percentages)
+          let triggeredSellGroup = null;
+          if (sellGroups.length > 0) {
+            for (const group of sellGroups) {
+              const rules = group.rules || [];
+              if (rules.length === 0) continue;
+              let groupPassed = true;
+              for (const rule of rules) {
+                const tfInds = indicatorsCache[rule.timeframe];
+                if (!evaluateCondition(rule, tfInds)) {
+                  groupPassed = false;
+                  break;
+                }
+              }
+              if (groupPassed) {
+                triggeredSellGroup = group;
+                break; // Execute first matching group
+              }
             }
           }
 
-          if (sellTriggered) {
-            console.log(`[AutoTrade] SELL signal triggered for ${key} at ₹${price} using condition "${sellCondObj.name}". Qty: ${currentQty}`);
-
-            const result = await hdfcService.placeOrder(user, stock, 'sell', price, currentQty);
+          if (triggeredSellGroup) {
+            const sellPct = parseFloat(triggeredSellGroup.sellPct) || 100;
+            const targetQty = Math.max(1, Math.floor(currentQty * (sellPct / 100)));
+            console.log(`[AutoTrade] SELL signal triggered for ${key} at ₹${price} using condition "${sellCondObj.name}" (Sell ${sellPct}%). Qty: ${targetQty} of total ${currentQty}`);
+            
+            const result = await hdfcService.placeOrder(user, stock, 'sell', price, targetQty);
             if (result && result.status === 'success') {
               const orderId = result.data.order_id;
 
@@ -243,10 +286,10 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
                 exchange: stock.exchange,
                 type: 'sell',
                 price,
-                quantity: currentQty,
+                quantity: targetQty,
                 orderId,
                 status: 'Traded',
-                message: `Assigned rule: ${sellCondObj.name} | Mode: ${result.mode}`
+                message: `Assigned rule: ${sellCondObj.name} | Partial Sell: ${sellPct}% | Mode: ${result.mode}`
               });
 
               // Clean up logs to keep latest 100 per user
@@ -259,7 +302,7 @@ exports.runAutoTradeCycle = async (liveMarketState) => {
                   exchange: stock.exchange,
                   type: 'sell',
                   price,
-                  quantity: currentQty,
+                  quantity: targetQty,
                   orderId,
                   mode: result.mode
                 });
@@ -288,7 +331,7 @@ async function pruneTradeLogs(userId) {
       const oldest = await Trade.find({ userId })
         .sort({ timestamp: 1 })
         .limit(count - 100);
-
+        
       const idsToDelete = oldest.map((o) => o._id);
       await Trade.deleteMany({ _id: { $in: idsToDelete } });
       console.log(`[AutoTrade] Pruned ${idsToDelete.length} old trades for user ${userId}`);

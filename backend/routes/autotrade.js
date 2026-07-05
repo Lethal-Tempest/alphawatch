@@ -44,7 +44,7 @@ router.post('/hdfc/connect', async (req, res, next) => {
 
     // Set expiry to 24 hours from now
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
+    
     await User.findByIdAndUpdate(req.user.id, {
       hdfcAccessToken: data.accessToken,
       hdfcTokenExpiresAt: expiresAt
@@ -123,7 +123,7 @@ router.get('/conditions', async (req, res, next) => {
  */
 router.post('/conditions', async (req, res, next) => {
   try {
-    const { name, type, rules } = req.body;
+    const { name, type, groups } = req.body;
     if (!name || !type) {
       return res.status(400).json({ error: 'Condition name and type are required.' });
     }
@@ -137,11 +137,11 @@ router.post('/conditions', async (req, res, next) => {
     user.conditions.push({
       name,
       type,
-      rules: Array.isArray(rules) ? rules : []
+      groups: Array.isArray(groups) ? groups : []
     });
 
     await user.save();
-
+    
     // Return updated list
     res.json({ success: true, conditions: user.conditions });
   } catch (error) {
@@ -154,7 +154,7 @@ router.post('/conditions', async (req, res, next) => {
  */
 router.put('/conditions/:id', async (req, res, next) => {
   try {
-    const { name, rules } = req.body;
+    const { name, groups } = req.body;
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
@@ -162,7 +162,7 @@ router.put('/conditions/:id', async (req, res, next) => {
     if (!cond) return res.status(404).json({ error: 'Condition not found.' });
 
     if (name !== undefined) cond.name = name;
-    if (rules !== undefined) cond.rules = Array.isArray(rules) ? rules : [];
+    if (groups !== undefined) cond.groups = Array.isArray(groups) ? groups : [];
 
     await user.save();
     res.json({ success: true, conditions: user.conditions });
@@ -229,7 +229,7 @@ router.get('/logs', async (req, res, next) => {
  */
 router.post('/toggle-stock', async (req, res, next) => {
   try {
-    const { watchlistId, symbol, exchange, autoTradeEnabled, assignedBuyConditionId, assignedSellConditionId } = req.body;
+    const { watchlistId, symbol, exchange, autoTradeEnabled, assignedBuyConditionId, assignedSellConditionId, tradeCapital } = req.body;
     if (!watchlistId || !symbol || !exchange) {
       return res.status(400).json({ error: 'watchlistId, symbol, and exchange are required.' });
     }
@@ -250,10 +250,12 @@ router.post('/toggle-stock', async (req, res, next) => {
       stock.autoTradeEnabled = true;
       stock.assignedBuyConditionId = assignedBuyConditionId;
       stock.assignedSellConditionId = assignedSellConditionId;
+      stock.tradeCapital = parseFloat(tradeCapital) > 0 ? parseFloat(tradeCapital) : undefined;
     } else {
       stock.autoTradeEnabled = false;
       stock.assignedBuyConditionId = undefined;
       stock.assignedSellConditionId = undefined;
+      stock.tradeCapital = undefined;
     }
 
     await wl.save();

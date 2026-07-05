@@ -47,6 +47,9 @@ const watchlistSchema = new mongoose.Schema({
       assignedSellConditionId: {
         type: mongoose.Schema.Types.ObjectId,
       },
+      tradeCapital: {
+        type: Number,
+      },
     },
   ],
   isDefault: {

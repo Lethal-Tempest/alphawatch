@@ -53,7 +53,12 @@ const userSchema = new mongoose.Schema({
     {
       name: { type: String, required: true },
       type: { type: String, enum: ['buy', 'sell'], required: true },
-      rules: { type: Array, default: [] }
+      groups: [
+        {
+          rules: { type: Array, default: [] },
+          sellPct: { type: Number, default: 100 }
+        }
+      ]
     }
   ],
   createdAt: { type: Date, default: Date.now },

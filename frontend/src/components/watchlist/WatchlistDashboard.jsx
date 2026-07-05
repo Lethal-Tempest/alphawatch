@@ -9,8 +9,8 @@ const fmt2 = (n) => (n != null && !isNaN(n)) ? Number(n).toFixed(2) : '—';
 const fmtV = (n) => {
   if (n == null || isNaN(n)) return '—';
   if (n >= 1_00_00_000) return (n / 1_00_00_000).toFixed(1) + ' Cr';
-  if (n >= 1_00_000) return (n / 1_00_000).toFixed(1) + ' L';
-  if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K';
+  if (n >= 1_00_000)    return (n / 1_00_000).toFixed(1) + ' L';
+  if (n >= 1_000)       return (n / 1_000).toFixed(0) + 'K';
   return String(n);
 };
 
@@ -274,34 +274,37 @@ export default function WatchlistDashboard({
   const [loading, setLoading] = useState(false);
   const [flashes, setFlashes] = useState({});
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-
+  
   // Score settings and local copy for modifications
   const [showScoreSettings, setShowScoreSettings] = useState(false);
   const [localConditions, setLocalConditions] = useState([]);
 
   // Condition pool states for stock-specific assignments
   const [conditionsPool, setConditionsPool] = useState([]);
+  const [globalConfig, setGlobalConfig] = useState({ enabled: false, capital: 50000 });
   const [selectedStockForAssign, setSelectedStockForAssign] = useState(null);
   const [selectedBuyId, setSelectedBuyId] = useState('');
   const [selectedSellId, setSelectedSellId] = useState('');
+  const [assignCapital, setAssignCapital] = useState('');
 
   const prevLtps = useRef({});
   const flashTimers = useRef({});
   const current = watchlists.find((w) => w._id === selectedId);
 
-  // Sync condition templates pool from backend
+  // Sync condition templates pool and global config from backend
   useEffect(() => {
-    const fetchConditions = async () => {
+    const fetchTradeSettings = async () => {
       try {
-        const res = await api.get('/trade/conditions');
+        const res = await api.get('/trade/config');
         if (res.data?.success) {
           setConditionsPool(res.data.conditions || []);
+          setGlobalConfig(res.data.config || { enabled: false, capital: 50000 });
         }
       } catch (err) {
-        console.error('Failed to fetch conditions pool:', err);
+        console.error('Failed to fetch trade settings:', err);
       }
     };
-    fetchConditions();
+    fetchTradeSettings();
   }, [refreshTrigger, selectedId]);
 
   // Sync local conditions when the active watchlist changes
@@ -336,7 +339,7 @@ export default function WatchlistDashboard({
         // 1. Fetch batch quotes (instant)
         const payload = current.stocks.map((s) => ({ symbol: s.symbol, exchange: s.exchange }));
         const quoteRes = await api.post('/stock/quotes', { stocks: payload });
-
+        
         if (cancelled) return;
 
         const newQuotes = {};
@@ -371,17 +374,17 @@ export default function WatchlistDashboard({
         // 2. Fetch indicators for all stocks progressively across all needed timeframes
         current.stocks.forEach(async (s) => {
           const key = `${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`;
-
+          
           for (const tf of neededTimeframes) {
             try {
               const indData = await fetchIndicators(s.exchange, s.symbol, tf);
               if (cancelled) return;
-
+              
               const latestValues = {};
               for (const [indKey, arr] of Object.entries(indData)) {
                 latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
               }
-
+              
               setIndicators((prev) => ({
                 ...prev,
                 [`${key}:${tf}`]: latestValues,
@@ -410,7 +413,7 @@ export default function WatchlistDashboard({
 
     const handleTick = (data) => {
       const key = `${data.exchange.toUpperCase()}:${data.symbol.toUpperCase()}`;
-
+      
       // Update quote
       setQuotes((prev) => {
         if (!prev[key]) return prev;
@@ -468,11 +471,11 @@ export default function WatchlistDashboard({
       if (!neededTimeframes.includes(data.interval)) return;
       const [exchange, symbol] = data.key.split(':');
       const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
-
+      
       try {
         invalidateIndicatorCache(exchange, symbol, data.interval);
         const indData = await fetchIndicators(exchange, symbol, data.interval);
-
+        
         const latestValues = {};
         for (const [indKey, arr] of Object.entries(indData)) {
           latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
@@ -500,7 +503,7 @@ export default function WatchlistDashboard({
     }
     const indicatorName = valOrIndicator;
     const quote = quotes[stockKey];
-
+    
     if (indicatorName === 'close' || indicatorName === 'ltp') {
       return quote?.ltp ?? 0;
     }
@@ -519,7 +522,7 @@ export default function WatchlistDashboard({
 
     const indObj = indicators[`${stockKey}:${tf}`];
     if (!indObj) return 0;
-
+    
     const value = indObj[indicatorName];
     return value != null && !isNaN(value) ? value : 0;
   };
@@ -532,7 +535,7 @@ export default function WatchlistDashboard({
 
     const stocksWithScore = current.stocks.map((stock) => {
       const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
-
+      
       const resolvedTokens = conditions.map((c) => {
         if (c.type === 'operand') {
           if (c.valueType === 'value') {
@@ -632,8 +635,8 @@ export default function WatchlistDashboard({
         <div className="flex items-center gap-3 shrink-0">
           {/* Manual Refresh */}
           <div className="w-8 h-8 flex items-center justify-center rounded-lg border transition-colors cursor-pointer"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' }}
-            onClick={() => setRefreshTrigger(t => t + 1)}
+               style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' }}
+               onClick={() => setRefreshTrigger(t => t + 1)}
           >
             {loading ? (
               <Loader2 size={14} className="animate-spin text-indigo-400" />
@@ -645,8 +648,9 @@ export default function WatchlistDashboard({
           {/* Score Settings Toggle */}
           <button
             onClick={() => setShowScoreSettings(prev => !prev)}
-            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border cursor-pointer transition-all flex items-center gap-1.5 ${showScoreSettings ? 'bg-indigo-600 text-white border-indigo-500 shadow-md' : 'hover:text-indigo-400'
-              }`}
+            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase border cursor-pointer transition-all flex items-center gap-1.5 ${
+              showScoreSettings ? 'bg-indigo-600 text-white border-indigo-500 shadow-md' : 'hover:text-indigo-400'
+            }`}
             style={!showScoreSettings ? { background: 'var(--bg-elevated)', borderColor: 'var(--border-base)', color: 'var(--text-secondary)' } : {}}
             title="Configure Custom Score Formula"
           >
@@ -659,7 +663,7 @@ export default function WatchlistDashboard({
       {/* ── Score Settings Collapsible Panel ── */}
       {showScoreSettings && (
         <div className="border rounded-2xl p-5 space-y-4 animate-fade-in"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
+             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-base)' }}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b" style={{ borderColor: 'var(--border-base)' }}>
             <div>
               <h3 className="text-xs font-black uppercase tracking-wider text-indigo-400">
@@ -680,7 +684,7 @@ export default function WatchlistDashboard({
 
           {/* Formula Display Area */}
           <div className="flex flex-wrap items-center gap-2 p-4 min-h-[70px] rounded-xl border border-dashed"
-            style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
+               style={{ borderColor: 'var(--border-muted)', background: 'var(--bg-base)' }}>
             {localConditions.map((cond, idx) => {
               if (cond.type === 'parenthesis') {
                 return (
@@ -905,9 +909,9 @@ export default function WatchlistDashboard({
                 const isDown = pct < 0;
 
                 const ltpClass = flash === 'up' ? 'text-emerald-300'
-                  : flash === 'down' ? 'text-rose-300'
-                    : isUp ? 'text-emerald-400'
-                      : isDown ? 'text-rose-400' : '';
+                               : flash === 'down' ? 'text-rose-300'
+                               : isUp ? 'text-emerald-400'
+                               : isDown ? 'text-rose-400' : '';
 
                 return (
                   <tr
@@ -929,14 +933,14 @@ export default function WatchlistDashboard({
 
                     {/* LTP */}
                     <td className={`p-3 font-mono font-bold transition-colors duration-150 ${ltpClass}`}
-                      style={!ltpClass ? { color: 'var(--text-primary)' } : {}}>
+                        style={!ltpClass ? { color: 'var(--text-primary)' } : {}}>
                       ₹{fmt2(quote?.ltp)}
                     </td>
 
                     {/* Change % */}
                     <td className="p-3">
                       <span className={`font-mono font-bold flex items-center gap-0.5 ${isUp ? 'text-emerald-400' : isDown ? 'text-rose-400' : ''}`}
-                        style={!isUp && !isDown ? { color: 'var(--text-muted)' } : {}}>
+                            style={!isUp && !isDown ? { color: 'var(--text-muted)' } : {}}>
                         {isUp ? <TrendingUp size={10} /> : isDown ? <TrendingDown size={10} /> : <Minus size={10} />}
                         {pct >= 0 ? '+' : ''}{fmt2(pct)}%
                       </span>
@@ -982,6 +986,7 @@ export default function WatchlistDashboard({
                             <div className="flex flex-col gap-0.5 text-[9px] text-left min-w-[130px]">
                               <span className="font-extrabold text-emerald-400">🟢 Buy: {buyCond ? buyCond.name : 'Unknown'}</span>
                               <span className="font-extrabold text-rose-400">🔴 Sell: {sellCond ? sellCond.name : 'Unknown'}</span>
+                              <span className="font-bold text-slate-300">💰 Capital: ₹{stock.tradeCapital || globalConfig.capital}</span>
                               <button
                                 onClick={async () => {
                                   const confirmed = window.confirm(`Are you sure you want to DISABLE auto trading for ${stock.symbol}?`);
@@ -1011,6 +1016,7 @@ export default function WatchlistDashboard({
                             onClick={() => {
                               setSelectedBuyId('');
                               setSelectedSellId('');
+                              setAssignCapital('');
                               setSelectedStockForAssign(stock);
                             }}
                             className="px-2.5 py-1 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 text-[10px] font-black uppercase rounded border border-indigo-500/20 cursor-pointer transition-colors"
@@ -1126,6 +1132,18 @@ export default function WatchlistDashboard({
                   </select>
                 </div>
 
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase" style={{ color: 'var(--text-muted)' }}>Investment Capital (INR)</label>
+                  <input
+                    type="number" step="any"
+                    placeholder={`e.g. 10000 (Defaults to global: ₹${globalConfig.capital})`}
+                    value={assignCapital}
+                    onChange={(e) => setAssignCapital(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
+                    style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                  />
+                </div>
+
                 <div className="flex justify-end gap-2 pt-2">
                   <button
                     onClick={() => setSelectedStockForAssign(null)}
@@ -1146,7 +1164,8 @@ export default function WatchlistDashboard({
                           exchange: selectedStockForAssign.exchange,
                           autoTradeEnabled: true,
                           assignedBuyConditionId: selectedBuyId,
-                          assignedSellConditionId: selectedSellId
+                          assignedSellConditionId: selectedSellId,
+                          tradeCapital: assignCapital
                         });
                         if (res.data?.success) {
                           onWatchlistsChange?.();

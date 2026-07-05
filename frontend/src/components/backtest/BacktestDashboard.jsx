@@ -296,19 +296,40 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
   const [buyConditions, setBuyConditions] = useState(() => {
     try {
       const saved = localStorage.getItem('aw_backtest_buy_conditions');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].leftIndicator && !parsed[0].rules) {
+          return [{ rules: parsed }];
+        }
+        return parsed;
+      }
     } catch {}
     return [
-      { timeframe: '5m', leftIndicator: 'rsi14', operator: '<', rightType: 'value', rightValue: '30', rightIndicator: 'close' }
+      {
+        rules: [
+          { timeframe: '5m', leftIndicator: 'rsi14', operator: '<', rightType: 'value', rightValue: '30', rightIndicator: 'close' }
+        ]
+      }
     ];
   });
   const [sellConditions, setSellConditions] = useState(() => {
     try {
       const saved = localStorage.getItem('aw_backtest_sell_conditions');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].leftIndicator && !parsed[0].rules) {
+          return [{ rules: parsed, sellPct: 100 }];
+        }
+        return parsed;
+      }
     } catch {}
     return [
-      { timeframe: '5m', leftIndicator: 'rsi14', operator: '>', rightType: 'value', rightValue: '70', rightIndicator: 'close' }
+      {
+        sellPct: 100,
+        rules: [
+          { timeframe: '5m', leftIndicator: 'rsi14', operator: '>', rightType: 'value', rightValue: '70', rightIndicator: 'close' }
+        ]
+      }
     ];
   });
 
@@ -361,47 +382,90 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
     }
   }, [results]);
 
-  const handleAddCondition = (type) => {
+  const handleAddGroup = (type) => {
     const list = type === 'buy' ? buyConditions : sellConditions;
     const setter = type === 'buy' ? setBuyConditions : setSellConditions;
     setter([
       ...list,
-      { timeframe, leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '', rightIndicator: 'close' }
+      { rules: [], sellPct: 100 }
     ]);
   };
 
-  const handleRemoveCondition = (type, index) => {
+  const handleRemoveGroup = (type, groupIndex) => {
     const list = type === 'buy' ? buyConditions : sellConditions;
     const setter = type === 'buy' ? setBuyConditions : setSellConditions;
-    setter(list.filter((_, i) => i !== index));
+    setter(list.filter((_, idx) => idx !== groupIndex));
   };
 
-  const handleConditionChange = (type, index, field, val) => {
+  const handleGroupSellPctChange = (groupIndex, value) => {
+    const updated = [...sellConditions];
+    updated[groupIndex] = { ...updated[groupIndex], sellPct: parseFloat(value) || 0 };
+    setSellConditions(updated);
+  };
+
+  const handleAddRuleRow = (type, groupIndex) => {
     const list = type === 'buy' ? buyConditions : sellConditions;
     const setter = type === 'buy' ? setBuyConditions : setSellConditions;
     const updated = [...list];
-    updated[index][field] = val;
+    updated[groupIndex] = {
+      ...updated[groupIndex],
+      rules: [
+        ...(updated[groupIndex].rules || []),
+        { timeframe, leftIndicator: 'close', operator: '>', rightType: 'value', rightValue: '', rightIndicator: 'close' }
+      ]
+    };
+    setter(updated);
+  };
+
+  const handleRemoveRuleRow = (type, groupIndex, ruleIndex) => {
+    const list = type === 'buy' ? buyConditions : sellConditions;
+    const setter = type === 'buy' ? setBuyConditions : setSellConditions;
+    const updated = [...list];
+    updated[groupIndex] = {
+      ...updated[groupIndex],
+      rules: (updated[groupIndex].rules || []).filter((_, idx) => idx !== ruleIndex)
+    };
+    setter(updated);
+  };
+
+  const handleRuleRowChange = (type, groupIndex, ruleIndex, field, value) => {
+    const list = type === 'buy' ? buyConditions : sellConditions;
+    const setter = type === 'buy' ? setBuyConditions : setSellConditions;
+    const updated = [...list];
+    const rules = [...updated[groupIndex].rules];
+    rules[ruleIndex] = { ...rules[ruleIndex], [field]: value };
+    updated[groupIndex] = { ...updated[groupIndex], rules };
     setter(updated);
   };
 
   const runBacktest = async () => {
     if (!selectedId) return alert('Please select or create a watchlist first.');
-    if (buyConditions.length === 0 && sellConditions.length === 0) {
-      return alert('Please configure at least one buy or sell condition.');
+
+    const totalBuyRules = buyConditions.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
+    const totalSellRules = sellConditions.reduce((acc, g) => acc + (g.rules?.length || 0), 0);
+    if (totalBuyRules === 0 && totalSellRules === 0) {
+      return alert('Please configure at least one buy or sell rule.');
     }
 
     setLoading(true);
     setResults([]);
     try {
-      const cleanBuy = buyConditions.map(c => ({
-        ...c,
-        rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
-        rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+      const cleanBuy = buyConditions.map(g => ({
+        ...g,
+        rules: (g.rules || []).map(c => ({
+          ...c,
+          rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
+          rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+        }))
       }));
-      const cleanSell = sellConditions.map(c => ({
-        ...c,
-        rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
-        rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+      const cleanSell = sellConditions.map(g => ({
+        ...g,
+        rules: (g.rules || []).map(c => ({
+          ...c,
+          rightValue: c.rightType === 'value' ? parseFloat(c.rightValue) : undefined,
+          rightIndicator: c.rightType === 'indicator' ? c.rightIndicator : undefined
+        })),
+        sellPct: parseFloat(g.sellPct) || 100
       }));
 
       const { data } = await api.post('/backtest', {
@@ -518,51 +582,117 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
         {/* Middle and Right: Conditions columns */}
         <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Buy Conditions */}
-          <div className="border border-emerald-900/30 rounded-xl p-3 bg-emerald-950/5 flex flex-col h-[280px] overflow-hidden">
+          <div className="border border-emerald-900/30 rounded-xl p-4 bg-emerald-950/5 flex flex-col h-[400px] overflow-hidden">
             <div className="flex items-center justify-between mb-3 shrink-0">
-              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">Buy Entry Conditions (AND)</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">Buy Conditions (OR Joined Groups)</span>
               <button
-                type="button" onClick={() => handleAddCondition('buy')}
-                className="p-1 rounded bg-emerald-900/30 border border-emerald-800/40 text-emerald-400 hover:bg-emerald-900/50 cursor-pointer transition-colors"
+                type="button" onClick={() => handleAddGroup('buy')}
+                className="flex items-center gap-1 px-2.5 py-1 text-[9px] font-black uppercase bg-emerald-900/30 border border-emerald-800/40 text-emerald-400 hover:bg-emerald-900/50 cursor-pointer transition-colors rounded-lg"
               >
-                <Plus size={12} />
+                <Plus size={11} /> Add Group (OR)
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
               {buyConditions.length === 0 && (
-                <p className="text-[10px] text-slate-500 italic text-center py-12">No buy criteria set. Add at least one.</p>
+                <p className="text-[10px] text-slate-500 italic text-center py-20">No buy groups set. Click "Add Group (OR)" above.</p>
               )}
-              {buyConditions.map((cond, idx) => (
-                <ConditionRow
-                  key={idx} cond={cond} idx={idx} type="buy"
-                  onChange={handleConditionChange} onRemove={handleRemoveCondition}
-                  inputCls={inputCls} inputStyle={inputStyle}
-                />
+              {buyConditions.map((group, gIdx) => (
+                <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                    <span className="text-[9px] font-black uppercase text-emerald-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
+                    <button
+                      type="button" onClick={() => handleRemoveGroup('buy', gIdx)}
+                      className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    {(group.rules || []).map((cond, idx) => (
+                      <ConditionRow
+                        key={idx} cond={cond} groupIndex={gIdx} idx={idx} type="buy"
+                        onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
+                        inputCls={inputCls} inputStyle={inputStyle}
+                      />
+                    ))}
+                    {(!group.rules || group.rules.length === 0) && (
+                      <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button" onClick={() => handleAddRuleRow('buy', gIdx)}
+                    className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
+                  >
+                    <Plus size={10} /> Add Rule (AND)
+                  </button>
+                </div>
               ))}
             </div>
           </div>
 
           {/* Sell Conditions */}
-          <div className="border border-rose-900/30 rounded-xl p-3 bg-rose-950/5 flex flex-col h-[280px] overflow-hidden">
+          <div className="border border-rose-900/30 rounded-xl p-4 bg-rose-950/5 flex flex-col h-[400px] overflow-hidden">
             <div className="flex items-center justify-between mb-3 shrink-0">
-              <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">Sell Exit Conditions (AND)</span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">Sell Conditions (OR Joined Groups)</span>
               <button
-                type="button" onClick={() => handleAddCondition('sell')}
-                className="p-1 rounded bg-rose-900/30 border border-rose-800/40 text-rose-400 hover:bg-rose-900/50 cursor-pointer transition-colors"
+                type="button" onClick={() => handleAddGroup('sell')}
+                className="flex items-center gap-1 px-2.5 py-1 text-[9px] font-black uppercase bg-rose-900/30 border border-rose-800/40 text-rose-400 hover:bg-rose-900/50 cursor-pointer transition-colors rounded-lg"
               >
-                <Plus size={12} />
+                <Plus size={11} /> Add Group (OR)
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
               {sellConditions.length === 0 && (
-                <p className="text-[10px] text-slate-500 italic text-center py-12">No sell criteria set. Add at least one.</p>
+                <p className="text-[10px] text-slate-500 italic text-center py-20">No sell groups set. Click "Add Group (OR)" above.</p>
               )}
-              {sellConditions.map((cond, idx) => (
-                <ConditionRow
-                  key={idx} cond={cond} idx={idx} type="sell"
-                  onChange={handleConditionChange} onRemove={handleRemoveCondition}
-                  inputCls={inputCls} inputStyle={inputStyle}
-                />
+              {sellConditions.map((group, gIdx) => (
+                <div key={gIdx} className="border border-slate-800 rounded-lg p-3 space-y-3 bg-slate-950/10">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                    <span className="text-[9px] font-black uppercase text-rose-400">Group {gIdx + 1} {gIdx > 0 && '[OR]'}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[8px] font-black uppercase text-slate-400">Sell %:</span>
+                        <input
+                          type="number" min="1" max="100"
+                          value={group.sellPct ?? 100}
+                          onChange={(e) => handleGroupSellPctChange(gIdx, e.target.value)}
+                          className="w-11 text-[10px] border rounded px-1 text-right focus:outline-none"
+                          style={{ background: 'var(--bg-base)', borderColor: 'var(--border-muted)', color: 'var(--text-primary)' }}
+                        />
+                      </div>
+                      <button
+                        type="button" onClick={() => handleRemoveGroup('sell', gIdx)}
+                        className="p-1 rounded text-slate-500 hover:text-rose-400 cursor-pointer transition-colors"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    {(group.rules || []).map((cond, idx) => (
+                      <ConditionRow
+                        key={idx} cond={cond} groupIndex={gIdx} idx={idx} type="sell"
+                        onChange={handleRuleRowChange} onRemove={handleRemoveRuleRow}
+                        inputCls={inputCls} inputStyle={inputStyle}
+                      />
+                    ))}
+                    {(!group.rules || group.rules.length === 0) && (
+                      <p className="text-[9px] text-slate-500 italic">No rules. Click "+ Add Rule (AND)".</p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button" onClick={() => handleAddRuleRow('sell', gIdx)}
+                    className="flex items-center gap-1 text-[8px] font-black uppercase px-2 py-1 border border-slate-800 text-indigo-400 bg-slate-900/40 hover:bg-slate-900/60 rounded cursor-pointer transition-colors"
+                  >
+                    <Plus size={10} /> Add Rule (AND)
+                  </button>
+                </div>
               ))}
             </div>
           </div>
@@ -664,7 +794,7 @@ export default function BacktestDashboard({ watchlists, selectedId }) {
 }
 
 // ── Helper Row component for condition rendering ──
-function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyle }) {
+function ConditionRow({ cond, groupIndex, idx, type, onChange, onRemove, inputCls, inputStyle }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/20 border p-2 rounded-lg"
          style={{ borderColor: 'var(--border-muted)' }}>
@@ -672,7 +802,7 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
       <div className="flex-1 min-w-[100px]">
         <select
           value={cond.leftIndicator}
-          onChange={e => onChange(type, idx, 'leftIndicator', e.target.value)}
+          onChange={e => onChange(type, groupIndex, idx, 'leftIndicator', e.target.value)}
           className={inputCls} style={inputStyle}
         >
           {INDICATOR_GROUPS.map(g => (
@@ -691,7 +821,7 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
       <div className="w-[85px]">
         <select
           value={cond.operator}
-          onChange={e => onChange(type, idx, 'operator', e.target.value)}
+          onChange={e => onChange(type, groupIndex, idx, 'operator', e.target.value)}
           className={inputCls} style={inputStyle}
         >
           {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
@@ -703,11 +833,11 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
         <select
           value={cond.rightType}
           onChange={e => {
-            onChange(type, idx, 'rightType', e.target.value);
+            onChange(type, groupIndex, idx, 'rightType', e.target.value);
             if (e.target.value === 'value') {
-              onChange(type, idx, 'rightValue', '');
+              onChange(type, groupIndex, idx, 'rightValue', '');
             } else {
-              onChange(type, idx, 'rightIndicator', cond.leftIndicator);
+              onChange(type, groupIndex, idx, 'rightIndicator', cond.leftIndicator);
             }
           }}
           className={inputCls} style={inputStyle}
@@ -722,7 +852,7 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
         <div className="w-[65px]">
           <input
             type="number" step="any" required placeholder="0.0" value={cond.rightValue}
-            onChange={e => onChange(type, idx, 'rightValue', e.target.value)}
+            onChange={e => onChange(type, groupIndex, idx, 'rightValue', e.target.value)}
             className={inputCls} style={inputStyle}
           />
         </div>
@@ -730,7 +860,7 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
         <div className="flex-1 min-w-[100px]">
           <select
             value={cond.rightIndicator}
-            onChange={e => onChange(type, idx, 'rightIndicator', e.target.value)}
+            onChange={e => onChange(type, groupIndex, idx, 'rightIndicator', e.target.value)}
             className={inputCls} style={inputStyle}
           >
             {INDICATOR_GROUPS.map(g => (
@@ -748,7 +878,7 @@ function ConditionRow({ cond, idx, type, onChange, onRemove, inputCls, inputStyl
 
       {/* Delete button */}
       <button
-        type="button" onClick={() => onRemove(type, idx)}
+        type="button" onClick={() => onRemove(type, groupIndex, idx)}
         className="p-1 hover:text-red-400 cursor-pointer text-slate-500 transition-colors"
       >
         <Trash2 size={13} />
