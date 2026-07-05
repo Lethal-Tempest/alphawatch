@@ -209,14 +209,7 @@ function evaluatePostfix(postfixTokens) {
 
 function convertLegacyScoreConditions(legacy) {
   if (!Array.isArray(legacy) || legacy.length === 0) {
-    return [
-      {
-        type: 'operand',
-        valueType: 'indicator',
-        timeframe: '5m',
-        indicator: 'close'
-      }
-    ];
+    return [];
   }
 
   if (legacy[0] && legacy[0].type) {
@@ -285,6 +278,8 @@ export default function WatchlistDashboard({
   const [showScoringPoolManager, setShowScoringPoolManager] = useState(false);
   const [newScoringName, setNewScoringName] = useState('');
   const [editingSystem, setEditingSystem] = useState(null);
+  const [draggedIdx, setDraggedIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
 
   // Condition pool states for stock-specific assignments
   const [conditionsPool, setConditionsPool] = useState([]);
@@ -303,8 +298,6 @@ export default function WatchlistDashboard({
       const found = scoringSystems.find(s => s._id === current.assignedScoringSystemId);
       if (found) return found;
     }
-    // Fallback: use first available user-wide scoring system
-    if (scoringSystems.length > 0) return scoringSystems[0];
     return null;
   }, [current?.assignedScoringSystemId, scoringSystems]);
 
@@ -334,14 +327,7 @@ export default function WatchlistDashboard({
     if (activeConditions && activeConditions.length > 0) {
       setLocalConditions(convertLegacyScoreConditions(activeConditions));
     } else {
-      setLocalConditions([
-        {
-          type: 'operand',
-          valueType: 'indicator',
-          timeframe: '5m',
-          indicator: 'close'
-        }
-      ]);
+      setLocalConditions([]);
     }
   }, [current?._id, activeConditions]);
 
@@ -402,14 +388,9 @@ export default function WatchlistDashboard({
               const indData = await fetchIndicators(s.exchange, s.symbol, tf);
               if (cancelled) return;
               
-              const latestValues = {};
-              for (const [indKey, arr] of Object.entries(indData)) {
-                latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
-              }
-              
               setIndicators((prev) => ({
                 ...prev,
-                [`${key}:${tf}`]: latestValues,
+                [`${key}:${tf}`]: indData,
               }));
             } catch (err) {
               console.error(`Failed to fetch indicators progressively for ${key}:${tf}:`, err);
@@ -498,14 +479,9 @@ export default function WatchlistDashboard({
         invalidateIndicatorCache(exchange, symbol, data.interval);
         const indData = await fetchIndicators(exchange, symbol, data.interval);
         
-        const latestValues = {};
-        for (const [indKey, arr] of Object.entries(indData)) {
-          latestValues[indKey] = (arr && arr.length > 0) ? arr[arr.length - 1] : null;
-        }
-
         setIndicators((prev) => ({
           ...prev,
-          [`${key}:${data.interval}`]: latestValues,
+          [`${key}:${data.interval}`]: indData,
         }));
       } catch (err) {
         console.error(`Failed to refresh indicator on candle update for ${data.key}:${data.interval}:`, err);
@@ -519,59 +495,240 @@ export default function WatchlistDashboard({
   }, [socket, activeConditions]);
 
   // ── Helper to retrieve indicator/value ──
-  const getIndicatorValue = (stockKey, tf, type, valOrIndicator) => {
+  const getIndicatorValue = (stockKey, tf, type, valOrIndicator, isPrev = false) => {
     if (type === 'value') {
       return parseFloat(valOrIndicator || 0);
     }
     const indicatorName = valOrIndicator;
     const quote = quotes[stockKey];
     
-    if (indicatorName === 'close' || indicatorName === 'ltp') {
-      return quote?.ltp ?? 0;
-    }
-    if (indicatorName === 'open') {
-      return quote?.open ?? 0;
-    }
-    if (indicatorName === 'high') {
-      return quote?.high ?? 0;
-    }
-    if (indicatorName === 'low') {
-      return quote?.low ?? 0;
-    }
-    if (indicatorName === 'volume') {
-      return quote?.volume ?? 0;
+    // Fallback to live quotes if array indicator is not fetched yet
+    if (isPrev === false) {
+      if (indicatorName === 'close' || indicatorName === 'ltp') {
+        return quote?.ltp ?? 0;
+      }
+      if (indicatorName === 'open') {
+        return quote?.open ?? 0;
+      }
+      if (indicatorName === 'high') {
+        return quote?.high ?? 0;
+      }
+      if (indicatorName === 'low') {
+        return quote?.low ?? 0;
+      }
+      if (indicatorName === 'volume') {
+        return quote?.volume ?? 0;
+      }
     }
 
     const indObj = indicators[`${stockKey}:${tf}`];
     if (!indObj) return 0;
     
-    const value = indObj[indicatorName];
+    const arr = indObj[indicatorName];
+    if (!arr || !Array.isArray(arr) || arr.length === 0) return 0;
+
+    const targetIdx = isPrev ? arr.length - 2 : arr.length - 1;
+    const value = arr[targetIdx];
     return value != null && !isNaN(value) ? value : 0;
+  };
+
+  const parseTokensToAST = (tokens) => {
+    let i = 0;
+
+    function parseStatements() {
+      const statements = [];
+      while (i < tokens.length) {
+        const token = tokens[i];
+        if (token.type === 'keyword' && ['elseif', 'else', 'fi'].includes(token.valueStr)) {
+          break;
+        }
+        statements.push(parseStatement());
+      }
+      return statements;
+    }
+
+    function parseStatement() {
+      const token = tokens[i];
+      if (token && token.type === 'keyword' && token.valueStr === 'if') {
+        i++; // consume 'if'
+        const conditionTokens = [];
+        while (i < tokens.length && !(tokens[i].type === 'keyword' && tokens[i].valueStr === 'then')) {
+          conditionTokens.push(tokens[i]);
+          i++;
+        }
+        if (i < tokens.length) i++; // consume 'then'
+
+        const branches = [{ condition: conditionTokens, body: null }];
+        branches[0].body = parseStatements();
+
+        let elseBody = null;
+        while (i < tokens.length && tokens[i].type === 'keyword' && tokens[i].valueStr === 'elseif') {
+          i++; // consume 'elseif'
+          const elifCond = [];
+          while (i < tokens.length && !(tokens[i].type === 'keyword' && tokens[i].valueStr === 'then')) {
+            elifCond.push(tokens[i]);
+            i++;
+          }
+          if (i < tokens.length) i++; // consume 'then'
+          const elifBody = parseStatements();
+          branches.push({ condition: elifCond, body: elifBody });
+        }
+
+        if (i < tokens.length && tokens[i].type === 'keyword' && tokens[i].valueStr === 'else') {
+          i++; // consume 'else'
+          elseBody = parseStatements();
+        }
+
+        if (i < tokens.length && tokens[i].type === 'keyword' && tokens[i].valueStr === 'fi') {
+          i++; // consume 'fi'
+        }
+
+        return { type: 'if', branches, elseBody };
+      }
+
+      if (token && token.type === 'keyword' && token.valueStr === 'score' && i + 1 < tokens.length && tokens[i + 1].type === 'assignment') {
+        i += 2; // consume 'score' and '='
+        const exprTokens = [];
+        while (i < tokens.length) {
+          const nextT = tokens[i];
+          if (nextT.type === 'keyword' && ['if', 'score', 'elseif', 'else', 'fi'].includes(nextT.valueStr)) {
+            if (nextT.valueStr === 'score' && i + 1 < tokens.length && tokens[i + 1].type === 'assignment') {
+              break;
+            }
+          }
+          exprTokens.push(nextT);
+          i++;
+        }
+        return { type: 'assignment', expression: exprTokens };
+      }
+
+      const exprTokens = [];
+      while (i < tokens.length) {
+        const nextT = tokens[i];
+        if (nextT.type === 'keyword' && ['if', 'elseif', 'else', 'fi'].includes(nextT.valueStr)) {
+          break;
+        }
+        if (nextT.type === 'keyword' && nextT.valueStr === 'score' && i + 1 < tokens.length && tokens[i + 1].type === 'assignment') {
+          break;
+        }
+        exprTokens.push(nextT);
+        i++;
+      }
+      return { type: 'expression', expression: exprTokens };
+    }
+
+    return parseStatements();
+  };
+
+  const evaluateSubExpr = (tokens, currentScore, stockKey, isPrev) => {
+    const resolved = tokens.map(t => {
+      if (t.type === 'keyword' && t.valueStr === 'score') {
+        return currentScore;
+      }
+      if (t.type === 'operand') {
+        if (t.valueType === 'value') {
+          return parseFloat(t.value ?? 0);
+        } else {
+          return getIndicatorValue(stockKey, t.timeframe, 'indicator', t.indicator, isPrev);
+        }
+      }
+      return t.valueStr || t.raw;
+    });
+
+    const postfix = infixToPostfix(resolved);
+    return evaluatePostfix(postfix);
+  };
+
+  const evaluateConditionExpr = (exprTokens, currentScore, stockKey) => {
+    const compOps = ['crossover', 'crossunder', '>=', '<=', '==', '!=', '>', '<'];
+    let compOpIdx = -1;
+    let compOp = null;
+
+    for (let i = 0; i < exprTokens.length; i++) {
+      const rawLower = exprTokens[i].valueStr
+        ? exprTokens[i].valueStr.toLowerCase()
+        : exprTokens[i].raw
+        ? exprTokens[i].raw.toLowerCase()
+        : String(exprTokens[i]).toLowerCase();
+      if (compOps.includes(rawLower)) {
+        compOpIdx = i;
+        compOp = rawLower;
+        break;
+      }
+    }
+
+    if (compOpIdx !== -1) {
+      const leftTokens = exprTokens.slice(0, compOpIdx);
+      const rightTokens = exprTokens.slice(compOpIdx + 1);
+
+      const latestLeft = evaluateSubExpr(leftTokens, currentScore, stockKey, false);
+      const prevLeft = evaluateSubExpr(leftTokens, currentScore, stockKey, true);
+
+      const latestRight = evaluateSubExpr(rightTokens, currentScore, stockKey, false);
+      const prevRight = evaluateSubExpr(rightTokens, currentScore, stockKey, true);
+
+      switch (compOp) {
+        case '>': return latestLeft > latestRight;
+        case '>=': return latestLeft >= latestRight;
+        case '==': return latestLeft == latestRight;
+        case '<=': return latestLeft <= latestRight;
+        case '<': return latestLeft < latestRight;
+        case '!=': return latestLeft != latestRight;
+        case 'crossover': return latestLeft >= latestRight && prevLeft < prevRight;
+        case 'crossunder': return latestLeft <= latestRight && prevLeft > prevRight;
+        default: return false;
+      }
+    }
+
+    return evaluateSubExpr(exprTokens, currentScore, stockKey, false);
+  };
+
+  const executeStatements = (statements, stockKey) => {
+    let score = 0;
+
+    function run(stmtList) {
+      for (const stmt of stmtList) {
+        if (stmt.type === 'assignment') {
+          score = evaluateConditionExpr(stmt.expression, score, stockKey);
+        } else if (stmt.type === 'expression') {
+          score = evaluateConditionExpr(stmt.expression, score, stockKey);
+        } else if (stmt.type === 'if') {
+          let conditionMet = false;
+          for (const branch of stmt.branches) {
+            if (evaluateConditionExpr(branch.condition, score, stockKey)) {
+              run(branch.body);
+              conditionMet = true;
+              break;
+            }
+          }
+          if (!conditionMet && stmt.elseBody) {
+            run(stmt.elseBody);
+          }
+        }
+      }
+    }
+
+    run(statements);
+    return score;
   };
 
   // ── Sort stocks by score descending ──
   const sortedStocks = useMemo(() => {
     if (!current?.stocks) return [];
 
-    const conditions = convertLegacyScoreConditions(activeConditions);
+    if (!current?.assignedScoringSystemId || !activeConditions || activeConditions.length === 0) {
+      return current.stocks.map((stock) => ({
+        ...stock,
+        score: 0,
+      }));
+    }
+
+    const statements = parseTokensToAST(activeConditions);
 
     const stocksWithScore = current.stocks.map((stock) => {
       const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
+      const score = executeStatements(statements, key);
       
-      const resolvedTokens = conditions.map((c) => {
-        if (c.type === 'operand') {
-          if (c.valueType === 'value') {
-            return parseFloat(c.value ?? 0);
-          } else {
-            return getIndicatorValue(key, c.timeframe, 'indicator', c.indicator);
-          }
-        }
-        return c.valueStr;
-      });
-
-      const postfix = infixToPostfix(resolvedTokens);
-      const score = evaluatePostfix(postfix);
-
       return {
         ...stock,
         score,
@@ -579,7 +736,7 @@ export default function WatchlistDashboard({
     });
 
     return [...stocksWithScore].sort((a, b) => b.score - a.score);
-  }, [current?.stocks, activeConditions, quotes, indicators]);
+  }, [current?.stocks, current?.assignedScoringSystemId, activeConditions, quotes, indicators]);
 
   // ── Formula management handlers ──
   const handleAddToken = (token) => {
@@ -617,18 +774,21 @@ export default function WatchlistDashboard({
     return conditions.map(c => {
       if (c.type === 'parenthesis') return c.valueStr;
       if (c.type === 'operator') return c.valueStr;
+      if (c.type === 'keyword') return c.valueStr;
+      if (c.type === 'comparison') return c.valueStr;
+      if (c.type === 'assignment') return c.valueStr;
       if (c.type === 'operand') {
         if (c.valueType === 'value') return c.value;
         return `${c.timeframe}:${c.indicator}`;
       }
-      return '';
+      return c.valueStr || c.raw || '';
     }).join(' ');
   };
 
   const ALL_INDICATOR_KEYS = INDICATOR_GROUPS.flatMap(g => g.options.map(opt => opt.key));
 
   const getTokensWithBoundaries = (text) => {
-    const regex = /(\(|\)|\+|-|\*|\/|[^\s()+\-*/]+)/g;
+    const regex = /(\(|\)|<=|>=|==|!=|<|>|=|\+|-|\*|\/|[^\s()+\-*/<>=!]+)/g;
     let match;
     const tokens = [];
     let idx = 0;
@@ -636,6 +796,7 @@ export default function WatchlistDashboard({
       const start = match.index;
       const end = regex.lastIndex;
       const raw = match[0];
+      const lower = raw.toLowerCase();
       
       let type = 'operand';
       let valueStr = raw;
@@ -645,10 +806,19 @@ export default function WatchlistDashboard({
       let invalid = false;
       let value = null;
 
-      if (['(', ')'].includes(raw)) {
+      if (['if', 'then', 'else', 'elseif', 'fi', 'score'].includes(lower)) {
+        type = 'keyword';
+        valueStr = lower;
+      } else if (['(', ')'].includes(raw)) {
         type = 'parenthesis';
       } else if (['+', '-', '*', '/'].includes(raw)) {
         type = 'operator';
+      } else if (['<=', '>=', '==', '!=', '<', '>', 'crossover', 'crossunder'].includes(lower)) {
+        type = 'comparison';
+        valueStr = lower;
+      } else if (raw === '=') {
+        type = 'assignment';
+        valueStr = '=';
       } else {
         if (!isNaN(raw)) {
           type = 'operand';
@@ -735,6 +905,39 @@ export default function WatchlistDashboard({
     }, 10);
   };
 
+  const handleDragStart = (e, index) => {
+    setDraggedIdx(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedIdx !== index) {
+      setDragOverIdx(index);
+    }
+  };
+
+  const handleDrop = (e, index) => {
+    e.preventDefault();
+    const sourceIdx = draggedIdx !== null ? draggedIdx : parseInt(e.dataTransfer.getData('text/plain'), 10);
+    if (sourceIdx != null && !isNaN(sourceIdx) && sourceIdx !== index) {
+      const newTokens = [...modalTokens];
+      const [removed] = newTokens.splice(sourceIdx, 1);
+      const targetIdx = index > sourceIdx ? index - 1 : index;
+      newTokens.splice(targetIdx, 0, removed);
+      const newFormulaText = newTokens.map(t => t.raw).join(' ');
+      setFormulaText(newFormulaText);
+    }
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  };
+
   const modalTokens = useMemo(() => {
     return getTokensWithBoundaries(formulaText);
   }, [formulaText]);
@@ -748,16 +951,24 @@ export default function WatchlistDashboard({
   }, [modalTokens, caretPos]);
 
   const autocompleteSuggestions = useMemo(() => {
-    if (!activeTokenUnderCaret || activeTokenUnderCaret.type !== 'operand' || activeTokenUnderCaret.valueType !== 'indicator') {
-      return [];
-    }
-    const query = activeTokenUnderCaret.indicator;
-    if (!query || query.length < 1) return [];
+    if (!activeTokenUnderCaret) return [];
     
-    return ALL_INDICATOR_KEYS.filter(key => 
-      key.toLowerCase().includes(query.toLowerCase()) && 
-      key.toLowerCase() !== query.toLowerCase()
-    ).slice(0, 8);
+    const rawLower = activeTokenUnderCaret.raw.toLowerCase();
+    if (rawLower.length < 1) return [];
+
+    const keywords = ['if', 'then', 'else', 'elseif', 'fi', 'score', 'crossover', 'crossunder'];
+    const matchingKeywords = keywords.filter(kw => kw.startsWith(rawLower) && kw !== rawLower);
+
+    let matchingIndicators = [];
+    const query = activeTokenUnderCaret.indicator || activeTokenUnderCaret.raw;
+    if (query && query.length >= 1) {
+      matchingIndicators = ALL_INDICATOR_KEYS.filter(key => 
+        key.toLowerCase().includes(query.toLowerCase()) && 
+        key.toLowerCase() !== query.toLowerCase()
+      ).slice(0, 8);
+    }
+
+    return [...matchingKeywords, ...matchingIndicators].slice(0, 8);
   }, [activeTokenUnderCaret]);
 
   const handleSaveModalScoreConditions = async (sysId, newName) => {
@@ -1220,7 +1431,7 @@ export default function WatchlistDashboard({
                       try {
                         const res = await api.post('/trade/scoring-systems', {
                           name: newScoringName.trim(),
-                          conditions: [{ type: 'operand', valueType: 'indicator', timeframe: '5m', indicator: 'close' }]
+                          conditions: []
                         });
                         if (res.data?.success) {
                           setScoringSystems(res.data.scoringSystems);
@@ -1378,6 +1589,12 @@ export default function WatchlistDashboard({
                           : "bg-amber-500/10 text-amber-400 border border-amber-500/30";
                       } else if (token.type === 'operator') {
                         bgStyle = "bg-indigo-500/10 text-indigo-400 border border-indigo-500/30";
+                      } else if (token.type === 'keyword') {
+                        bgStyle = "bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/30 font-extrabold uppercase tracking-wider text-[10px]";
+                      } else if (token.type === 'comparison') {
+                        bgStyle = "bg-teal-500/15 text-teal-300 border border-teal-500/30 font-bold";
+                      } else if (token.type === 'assignment') {
+                        bgStyle = "bg-sky-500/15 text-sky-300 border border-sky-500/30 font-black";
                       } else if (token.type === 'operand') {
                         if (token.valueType === 'value') {
                           bgStyle = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono";
@@ -1391,7 +1608,13 @@ export default function WatchlistDashboard({
                       return (
                         <span
                           key={idx}
-                          className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center select-none ${bgStyle}`}
+                          draggable={true}
+                          onDragStart={(e) => handleDragStart(e, idx)}
+                          onDragOver={(e) => handleDragOver(e, idx)}
+                          onDrop={(e) => handleDrop(e, idx)}
+                          onDragEnd={handleDragEnd}
+                          onDragLeave={() => setDragOverIdx(null)}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center select-none cursor-grab active:cursor-grabbing transition-all ${bgStyle} ${dragOverIdx === idx ? 'border-l-4 border-l-indigo-500 translate-x-1 ring-2 ring-indigo-500/50' : ''} ${draggedIdx === idx ? 'opacity-40 scale-95' : ''}`}
                           title={token.invalid && !isEditing ? `Unknown indicator name: "${token.indicator}"` : undefined}
                         >
                           {token.type === 'operand' && token.valueType === 'indicator' && token.timeframe ? (
@@ -1403,6 +1626,17 @@ export default function WatchlistDashboard({
                         </span>
                       );
                     })}
+                    {modalTokens.length > 0 && (
+                      <div
+                        onDragOver={(e) => handleDragOver(e, modalTokens.length)}
+                        onDrop={(e) => handleDrop(e, modalTokens.length)}
+                        onDragLeave={() => setDragOverIdx(null)}
+                        className={`w-6 h-8 rounded-lg border border-dashed flex items-center justify-center transition-all ${dragOverIdx === modalTokens.length ? 'border-indigo-500 bg-indigo-500/10 ring-2 ring-indigo-500/50 scale-105' : 'border-slate-800 opacity-20 hover:opacity-40'}`}
+                        title="Drop here to append to formula"
+                      >
+                        <Plus size={10} className="text-slate-400" />
+                      </div>
+                    )}
                     {modalTokens.length === 0 && (
                       <span className="text-xs text-slate-500 italic select-none">Formula is empty. Use keyboard or visual buttons below.</span>
                     )}

@@ -48,6 +48,11 @@ exports.getIndicators = async (req, res, next) => {
 
     // 3. Compute all indicators server-side
     const indicators = indicatorService.computeAllIndicators(candles);
+    indicators.close = candles.map(c => +c.close);
+    indicators.open = candles.map(c => +c.open);
+    indicators.high = candles.map(c => +c.high);
+    indicators.low = candles.map(c => +c.low);
+    indicators.volume = candles.map(c => +c.volume);
 
     res.json({ success: true, count: candles.length, indicators });
   } catch (error) {

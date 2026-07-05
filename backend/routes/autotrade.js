@@ -65,21 +65,6 @@ router.get('/config', async (req, res, next) => {
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
     let scoringSystems = user.scoringSystems || [];
-    if (scoringSystems.length === 0) {
-      user.scoringSystems.push({
-        name: 'Default Close Price',
-        conditions: [
-          {
-            type: 'operand',
-            valueType: 'indicator',
-            timeframe: '5m',
-            indicator: 'close'
-          }
-        ]
-      });
-      await user.save();
-      scoringSystems = user.scoringSystems;
-    }
 
     const connected = !!(user.hdfcAccessToken && user.hdfcTokenExpiresAt && new Date() < new Date(user.hdfcTokenExpiresAt));
 
@@ -309,7 +294,7 @@ const validIndicatorsForParsing = new Set([
 ]);
 
 function parseFormulaString(formulaStr) {
-  const regex = /(\(|\)|\+|-|\*|\/|[^\s()+\-*/]+)/g;
+  const regex = /(\(|\)|<=|>=|==|!=|<|>|=|\+|-|\*|\/|[^\s()+\-*/<>=!]+)/g;
   const rawTokens = formulaStr.match(regex) || [];
   
   const tokens = [];
@@ -317,10 +302,18 @@ function parseFormulaString(formulaStr) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
 
-    if (['(', ')'].includes(trimmed)) {
+    const lower = trimmed.toLowerCase();
+
+    if (['if', 'then', 'else', 'elseif', 'fi', 'score'].includes(lower)) {
+      tokens.push({ type: 'keyword', valueStr: lower });
+    } else if (['(', ')'].includes(trimmed)) {
       tokens.push({ type: 'parenthesis', valueStr: trimmed });
     } else if (['+', '-', '*', '/'].includes(trimmed)) {
       tokens.push({ type: 'operator', valueStr: trimmed });
+    } else if (['<=', '>=', '==', '!=', '<', '>', 'crossover', 'crossunder'].includes(lower)) {
+      tokens.push({ type: 'comparison', valueStr: lower });
+    } else if (trimmed === '=') {
+      tokens.push({ type: 'assignment', valueStr: '=' });
     } else {
       if (!isNaN(trimmed)) {
         tokens.push({ type: 'operand', valueType: 'value', value: parseFloat(trimmed) });

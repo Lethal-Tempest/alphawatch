@@ -58,14 +58,7 @@ const watchlistSchema = new mongoose.Schema({
   },
   scoreConditions: {
     type: Array,
-    default: () => [
-      {
-        type: 'operand',
-        valueType: 'indicator',
-        timeframe: '5m',
-        indicator: 'close'
-      }
-    ]
+    default: () => []
   },
   assignedScoringSystemId: {
     type: mongoose.Schema.Types.ObjectId,
