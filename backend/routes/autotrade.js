@@ -340,8 +340,38 @@ function parseFormulaString(formulaStr) {
     }
   }
 
+  const mergedTokens = [];
+  for (let idx = 0; idx < tokens.length; idx++) {
+    const current = tokens[idx];
+    if (
+      current.type === 'operator' && current.valueStr === '-' &&
+      idx + 1 < tokens.length &&
+      tokens[idx + 1].type === 'operand' && tokens[idx + 1].valueType === 'value'
+    ) {
+      const prev = mergedTokens[mergedTokens.length - 1];
+      const isUnary = !prev || 
+                      prev.type === 'operator' || 
+                      prev.type === 'comparison' || 
+                      prev.type === 'assignment' || 
+                      (prev.type === 'parenthesis' && prev.valueStr === '(') ||
+                      (prev.type === 'keyword' && ['then', 'else', 'elseif'].includes(prev.valueStr));
+      
+      if (isUnary) {
+        const nextVal = tokens[idx + 1];
+        mergedTokens.push({
+          type: 'operand',
+          valueType: 'value',
+          value: -nextVal.value
+        });
+        idx++;
+        continue;
+      }
+    }
+    mergedTokens.push(current);
+  }
+
   let balance = 0;
-  for (const t of tokens) {
+  for (const t of mergedTokens) {
     if (t.type === 'parenthesis') {
       if (t.valueStr === '(') balance++;
       else balance--;
@@ -354,7 +384,7 @@ function parseFormulaString(formulaStr) {
     throw new Error('Mismatched parenthesis: missing closing bracket ")"');
   }
 
-  return tokens;
+  return mergedTokens;
 }
 
 /**

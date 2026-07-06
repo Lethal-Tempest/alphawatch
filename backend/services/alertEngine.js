@@ -371,7 +371,8 @@ exports.evaluateAlertImmediately = async (alertId) => {
 
     const localMarketState = {};
     const now = new Date();
-    const timeInt = now.getHours() * 100 + now.getMinutes();
+    const nowIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const timeInt = nowIST.getHours() * 100 + nowIST.getMinutes();
     const isMarketOpen = timeInt >= 915 && timeInt <= 1530;
 
     for (const stock of targetStocks) {

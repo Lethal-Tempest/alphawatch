@@ -584,7 +584,10 @@ export default function WatchlistDashboard({
         const exprTokens = [];
         while (i < tokens.length) {
           const nextT = tokens[i];
-          if (nextT.type === 'keyword' && ['if', 'score', 'elseif', 'else', 'fi'].includes(nextT.valueStr)) {
+          if (nextT.type === 'keyword') {
+            if (['if', 'elseif', 'else', 'fi'].includes(nextT.valueStr)) {
+              break;
+            }
             if (nextT.valueStr === 'score' && i + 1 < tokens.length && tokens[i + 1].type === 'assignment') {
               break;
             }
@@ -844,7 +847,49 @@ export default function WatchlistDashboard({
       });
       idx++;
     }
-    return tokens;
+    const mergedTokens = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const current = tokens[i];
+      if (
+        current.type === 'operator' && current.raw === '-' &&
+        i + 1 < tokens.length &&
+        tokens[i + 1].type === 'operand' && tokens[i + 1].valueType === 'value'
+      ) {
+        const prev = mergedTokens[mergedTokens.length - 1];
+        const isUnary = !prev || 
+                        prev.type === 'operator' || 
+                        prev.type === 'comparison' || 
+                        prev.type === 'assignment' || 
+                        (prev.type === 'parenthesis' && prev.raw === '(') ||
+                        (prev.type === 'keyword' && ['then', 'else', 'elseif'].includes(prev.valueStr));
+        
+        if (isUnary) {
+          const nextVal = tokens[i + 1];
+          mergedTokens.push({
+            idx: current.idx,
+            raw: `${current.raw}${nextVal.raw}`,
+            start: current.start,
+            end: nextVal.end,
+            type: 'operand',
+            valueType: 'value',
+            timeframe: '5m',
+            indicator: null,
+            invalid: false,
+            value: -nextVal.value,
+            valueStr: `${current.raw}${nextVal.raw}`
+          });
+          i++;
+          continue;
+        }
+      }
+      mergedTokens.push(current);
+    }
+
+    mergedTokens.forEach((t, index) => {
+      t.idx = index;
+    });
+
+    return mergedTokens;
   };
 
   const getBracketHighlights = (tokens) => {

@@ -267,21 +267,39 @@ exports.fetchHistoricalCandles = async (exchange, symbol, interval, priority = '
   const fromDateStr = `${pastDate.getFullYear()}-${pad(pastDate.getMonth() + 1)}-${pad(pastDate.getDate())} 09:15`;
   const toDateStr = `${todayDate.getFullYear()}-${pad(todayDate.getMonth() + 1)}-${pad(todayDate.getDate())} 15:30`;
 
-  const jwtToken = await self.getAngelOneSession();
-  const response = await enqueueRequest(() =>
-    axios.post(
-      ANGEL.HISTORICAL_URL,
-      {
-        exchange: exchange.toUpperCase(),
-        symboltoken: scripMatch.token,
-        interval: apiInterval,
-        fromdate: fromDateStr,
-        todate: toDateStr,
-      },
-      { headers: buildAuthHeaders(jwtToken) }
-    ),
-    priority
-  );
+  let response;
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    try {
+      const jwtToken = await self.getAngelOneSession();
+      response = await enqueueRequest(() =>
+        axios.post(
+          ANGEL.HISTORICAL_URL,
+          {
+            exchange: exchange.toUpperCase(),
+            symboltoken: scripMatch.token,
+            interval: apiInterval,
+            fromdate: fromDateStr,
+            todate: toDateStr,
+          },
+          { headers: buildAuthHeaders(jwtToken) }
+        ),
+        priority
+      );
+      break;
+    } catch (err) {
+      attempts++;
+      const isRateLimit = err.response?.status === 403 || err.message?.includes('exceeding access rate');
+      if (isRateLimit && attempts < maxAttempts) {
+        console.warn(`[AngelOne] Historical rate limit hit for ${key} (${interval}). Retrying in 2.5s (attempt ${attempts}/${maxAttempts})...`);
+        await new Promise(r => setTimeout(r, 2500));
+      } else {
+        throw err;
+      }
+    }
+  }
 
   if (!response.data?.status || !Array.isArray(response.data.data)) {
     throw new Error(`AngelOne API returned empty data for ${key} (${interval})`);

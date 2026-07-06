@@ -45,15 +45,26 @@ function saveCacheToDisk() {
   }
 }
 
-// Helper to load cache from disk - modified to clear cache on cold start
 function loadCacheFromDisk() {
   try {
     if (fs.existsSync(CACHE_FILE)) {
-      console.log('🗑️ Cold start: Clearing stale cache on disk to refresh data...');
-      fs.unlinkSync(CACHE_FILE);
+      console.log('📥 Loading candleBuffer cache from disk...');
+      const raw = fs.readFileSync(CACHE_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (data.candleBuffer) {
+        for (const [key, val] of Object.entries(data.candleBuffer)) {
+          candleBuffer[key] = val;
+        }
+      }
+      if (data.historyLoaded) {
+        for (const [key, val] of Object.entries(data.historyLoaded)) {
+          historyLoaded.set(key, val);
+        }
+      }
+      console.log(`✅ Loaded cache for ${candleBuffer.size} stock keys.`);
     }
   } catch (err) {
-    console.error('Failed to clear candleBuffer cache on disk:', err.message);
+    console.error('Failed to load candleBuffer cache from disk:', err.message);
   }
 }
 

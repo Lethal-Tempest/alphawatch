@@ -95,9 +95,10 @@ exports.runPollingCycle = async () => {
     const allKeys = new Set([...activeSubscriptions, ...alertKeys, ...autoTradeKeys]);
     if (allKeys.size === 0) return;
 
-    // NSE/BSE: 09:15 - 15:30 IST (server must run with TZ=Asia/Kolkata)
-    const now     = new Date();
-    const timeInt = now.getHours() * 100 + now.getMinutes();
+    // NSE/BSE: 09:15 - 15:30 IST (using explicit Asia/Kolkata timezone)
+    const now = new Date();
+    const nowIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const timeInt = nowIST.getHours() * 100 + nowIST.getMinutes();
     const isMarketOpen = timeInt >= 915 && timeInt <= 1530;
 
     // Resolve scrip tokens for all keys
