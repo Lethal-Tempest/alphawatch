@@ -129,16 +129,27 @@ async function startServer() {
     await connectDB();
     await angelOne.syncScripMaster();
     await angelOne.getAngelOneSession();
-    await angelOneSocket.connect();
 
-    httpServer.listen(PORT, () => {
-      console.log(`\n🚀 AlphaWatch Server running on http://localhost:${PORT}`);
-      console.log(`🌐 WebSocket server ready`);
+    // ── Bind HTTP port FIRST so Render detects it immediately ────────────────
+    await new Promise((resolve) => {
+      httpServer.listen(PORT, () => {
+        console.log(`\n🚀 AlphaWatch Server running on http://localhost:${PORT}`);
+        console.log(`🌐 WebSocket server ready`);
+        resolve();
+      });
     });
 
+    // ── Start polling loop ───────────────────────────────────────────────────
     setInterval(polling.runPollingCycle, 5000);
     console.log('⏱️  Market polling loop started (5s interval)');
 
+    // ── Connect Angel One WebSocket in the background ────────────────────────
+    // This must NOT block the HTTP server boot — it can be slow or retry.
+    angelOneSocket.connect().catch((err) => {
+      console.error('❌ [AngelOne WS] Initial connection failed (will retry):', err.message);
+    });
+
+    // ── Session + WebSocket refresh every 22 hours ───────────────────────────
     setInterval(async () => {
       try { 
         await angelOne.getAngelOneSession(); 
