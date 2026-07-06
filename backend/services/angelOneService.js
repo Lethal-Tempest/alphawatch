@@ -17,7 +17,9 @@ const ANGEL   = require('../config/angelone');
 let angelScripMaster  = [];
 const nseScripMap = new Map();
 const bseScripMap = new Map();
+const tokenToScripMap = new Map();
 let angelSessionToken = null;
+let angelFeedToken = null;
 let angelSessionExpiry = 0;
 
 // Self-reference so inner functions can call sibling exports safely
@@ -69,9 +71,14 @@ exports.getAngelOneSession = async () => {
   }
 
   angelSessionToken  = res.data.data.jwtToken;
+  angelFeedToken     = res.data.data.feedToken;
   angelSessionExpiry = now + ANGEL.SESSION_TTL_MS;
   console.log('🔐 AngelOne session refreshed.');
   return angelSessionToken;
+};
+
+exports.getFeedToken = () => {
+  return angelFeedToken;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,8 +107,10 @@ exports.syncScripMaster = async () => {
   // Clear and populate quick-lookup maps
   nseScripMap.clear();
   bseScripMap.clear();
+  tokenToScripMap.clear();
   for (const item of angelScripMaster) {
     const symbolKey = item.symbol.toUpperCase();
+    tokenToScripMap.set(String(item.token), item);
     if (item.exch_seg === 'NSE') {
       const cleanSymbol = symbolKey.replace(/-EQ$|-BE$|-SM$|-ST$/, '');
       nseScripMap.set(cleanSymbol, item);
@@ -349,4 +358,9 @@ exports.fetchHistoricalCandles = async (exchange, symbol, interval, priority = '
 
   return parsedCandles;
 };
+
+exports.resolveTokenByCode = (token) => {
+  return tokenToScripMap.get(String(token));
+};
+
 

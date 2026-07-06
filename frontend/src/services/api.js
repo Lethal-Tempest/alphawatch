@@ -45,6 +45,12 @@ export function invalidateIndicatorCache(exchange, symbol, interval) {
   indicatorCache.delete(`${exchange}:${symbol}:${interval}`);
 }
 
+/** Manually set indicator cache for a symbol/interval (e.g. from websocket stream) */
+export function setIndicatorCache(exchange, symbol, interval, data) {
+  const cacheKey = `${exchange}:${symbol}:${interval}`;
+  indicatorCache.set(cacheKey, { data, fetchedAt: Date.now() });
+}
+
 export async function fetchIndicatorsBatch(stocks, intervals) {
   const { data } = await api.post('/indicators/batch', { stocks, intervals });
   if (!data?.success || !data.indicators) throw new Error('Bad batch indicators response');

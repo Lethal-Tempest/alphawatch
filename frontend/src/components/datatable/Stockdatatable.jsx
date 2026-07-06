@@ -15,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { RefreshCw, Download, X, ChevronDown, Activity, Settings2 } from 'lucide-react';
-import api, { fetchIndicators, invalidateIndicatorCache } from '../../services/api';
+import api, { fetchIndicators, invalidateIndicatorCache, setIndicatorCache } from '../../services/api';
 
 const TABLE_ROWS = 1000;
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
@@ -264,6 +264,16 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   const currentParamsRef = useRef({ symbol, exchange, interval });
   const tableBodyRef = useRef(null);
 
+  const allCandlesRef = useRef({});
+  const allIndicatorsRef = useRef({});
+
+  useEffect(() => {
+    allCandlesRef.current = {};
+    allIndicatorsRef.current = {};
+    setCandles([]);
+    setIndicators(null);
+  }, [symbol, exchange]);
+
   useEffect(() => {
     currentParamsRef.current = { symbol, exchange, interval };
   }, [symbol, exchange, interval]);
@@ -275,6 +285,22 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   // ── Full data fetch (candles + indicators together) ───────────────────────
   const fetchData = useCallback(async (sym, exch, iv) => {
     if (!sym || !exch) return;
+
+    if (allCandlesRef.current[iv] && allIndicatorsRef.current[iv]) {
+      setCandles(allCandlesRef.current[iv]);
+      setIndicators(allIndicatorsRef.current[iv]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    if (socket && socket.connected && Object.keys(allCandlesRef.current).length === 0) {
+      console.log('🔌 [StockDataTable] Socket is connected. Relying on WebSocket history stream.');
+      setLoading(true);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -290,9 +316,6 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
         return;
       }
 
-      // Filter out zero-volume candles before storing — they are phantom
-      // entries with no real trade activity and must not appear in the table
-      // or be fed into indicator calculations.
       const sorted = [...candleRes.data.candles]
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
         .filter(c => (+c.volume || 0) > 0)
@@ -307,7 +330,7 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [socket]);
 
   useEffect(() => {
     fetchData(symbol, exchange, interval);
@@ -317,31 +340,36 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   const handleIntervalChange = (iv) => {
     setIntervalVal(iv);
     localStorage.setItem('aw_interval', iv);
-  };
 
-  // ── Re-fetch only indicators (candles already updated by socket) ───────────
-  // Called after a live candle arrives so the new row shows real values.
-  const refreshIndicators = useCallback(async (sym, exch, iv) => {
-    try {
-      invalidateIndicatorCache(exch, sym, iv);
-      const indData = await fetchIndicators(exch, sym, iv);
-      setIndicators(indData);
-    } catch (err) {
-      console.warn('[StockDataTable] indicator refresh failed:', err.message);
+    const cachedCandles = allCandlesRef.current[iv];
+    const cachedIndicators = allIndicatorsRef.current[iv];
+    if (cachedCandles && cachedIndicators) {
+      setCandles(cachedCandles);
+      setIndicators(cachedIndicators);
+      setLoading(false);
+      setError(null);
+    } else {
+      fetchData(symbol, exchange, iv);
     }
-  }, []);
+  };
 
   // ── Live candle updates via socket ─────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ key: updKey, interval: updInterval, candle }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle, indicators: updIndicators }) => {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
       if (updInterval !== interval) return;
 
       // Skip zero-volume candles — same rule as the backend aggregator
       if (!candle.volume || candle.volume <= 0) return;
+
+      if (updIndicators) {
+        setIndicatorCache(exchange, symbol, interval, updIndicators);
+        setIndicators(updIndicators);
+        allIndicatorsRef.current[interval] = updIndicators;
+      }
 
       setCandles(prev => {
         const updated = [...prev];
@@ -354,24 +382,56 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
           updated.push({ ...candle });
           if (updated.length > TABLE_ROWS) updated.shift();
         }
+        allCandlesRef.current[interval] = updated;
         return updated;
       });
+    };
 
-      // Debounce indicator re-fetch so rapid ticks within the same candle
-      // don't hammer the API — only fire after quiet for 400 ms
-      clearTimeout(indDebounceRef.current);
-      indDebounceRef.current = setTimeout(() => {
-        const { symbol: s, exchange: e, interval: iv } = currentParamsRef.current;
-        refreshIndicators(s, e, iv);
-      }, 400);
+    const candleHistoryHandler = ({ key, intervals }) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      if (key !== targetKey) return;
+
+      Object.entries(intervals).forEach(([iv, rawCandles]) => {
+        const sorted = [...rawCandles]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+          .filter(c => (+c.volume || 0) > 0)
+          .slice(-TABLE_ROWS);
+        allCandlesRef.current[iv] = sorted;
+      });
+
+      const currentCandles = allCandlesRef.current[interval];
+      if (currentCandles) {
+        setCandles(currentCandles);
+        setLoading(false);
+      }
+    };
+
+    const indicatorHistoryHandler = ({ key, intervals }) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      if (key !== targetKey) return;
+
+      Object.entries(intervals).forEach(([iv, indData]) => {
+        setIndicatorCache(exchange, symbol, iv, indData);
+        allIndicatorsRef.current[iv] = indData;
+      });
+
+      const currentIndicators = allIndicatorsRef.current[interval];
+      if (currentIndicators) {
+        setIndicators(currentIndicators);
+        setLoading(false);
+      }
     };
 
     socket.on('candle_update', handler);
+    socket.on('candle_history', candleHistoryHandler);
+    socket.on('indicator_history', indicatorHistoryHandler);
+
     return () => {
       socket.off('candle_update', handler);
-      clearTimeout(indDebounceRef.current);
+      socket.off('candle_history', candleHistoryHandler);
+      socket.off('indicator_history', indicatorHistoryHandler);
     };
-  }, [socket, exchange, symbol, interval, refreshIndicators]);
+  }, [socket, exchange, symbol, interval]);
 
   // ── getVal: map column key → indicator value at candle index i ─────────────
   // `i` is the index into the `candles` array (oldest→newest).

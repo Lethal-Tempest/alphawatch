@@ -14,9 +14,11 @@ const connectDB    = require('./config/db');
 const errorHandler = require('./middleware/errorHandler');
 
 const angelOne        = require('./services/angelOneService');
+const angelOneSocket  = require('./services/angelOneSocket');
 const polling         = require('./services/pollingLoop');
 const alertEngine     = require('./services/alertEngine');
 const candleAggregator = require('./services/candleAggregator');
+const indicatorService = require('./services/indicatorService');
 
 const app        = express();
 const httpServer = http.createServer(app);
@@ -63,7 +65,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('subscribe', ({ symbol, exchange }) => {
+  socket.on('subscribe', async ({ symbol, exchange }) => {
     if (!symbol || !exchange) return;
     const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
     socket.join(`ticker:${key}`);
@@ -72,13 +74,43 @@ io.on('connection', (socket) => {
     const liveTick = polling.getLiveState(key);
     if (liveTick) socket.emit('tick', liveTick);
 
-    const history = {};
-    for (const interval of Object.keys(candleAggregator.INTERVAL_MS)) {
-      const candles = candleAggregator.getCandles(key, interval);
-      if (candles.length > 0) history[interval] = candles;
-    }
-    if (Object.keys(history).length > 0) {
-      socket.emit('candle_history', { key, intervals: history });
+    // Fetch and populate historical candles for all intervals if needed, and pre-calculate indicators
+    try {
+      const intervals = Object.keys(candleAggregator.INTERVAL_MS);
+      await Promise.all(
+        intervals.map(async (interval) => {
+          if (!candleAggregator.hasHistory(key, interval)) {
+            await candleAggregator.getOrFetchHistory(key, exchange, symbol, interval, () =>
+              angelOne.fetchHistoricalCandles(exchange, symbol, interval, 'low')
+            );
+          }
+        })
+      );
+
+      const history = {};
+      const indicatorsHistory = {};
+      for (const interval of intervals) {
+        const candles = candleAggregator.getCandles(key, interval);
+        if (candles.length > 0) {
+          history[interval] = candles;
+          
+          // Pre-calculate indicators
+          const indicators = indicatorService.computeAllIndicators(candles);
+          indicators.close = candles.map(c => +c.close);
+          indicators.open = candles.map(c => +c.open);
+          indicators.high = candles.map(c => +c.high);
+          indicators.low = candles.map(c => +c.low);
+          indicators.volume = candles.map(c => +c.volume);
+          indicatorsHistory[interval] = indicators;
+        }
+      }
+
+      if (Object.keys(history).length > 0) {
+        socket.emit('candle_history', { key, intervals: history });
+        socket.emit('indicator_history', { key, intervals: indicatorsHistory });
+      }
+    } catch (err) {
+      console.error(`❌ [Socket Subscribe] Failed to load history for ${key}:`, err.message);
     }
 
     console.log(`📈 ${socket.id} subscribed to ${key}`);
@@ -109,6 +141,7 @@ async function startServer() {
     await connectDB();
     await angelOne.syncScripMaster();
     await angelOne.getAngelOneSession();
+    await angelOneSocket.connect();
 
     httpServer.listen(PORT, () => {
       console.log(`\n🚀 AlphaWatch Server running on http://localhost:${PORT}`);
@@ -119,7 +152,10 @@ async function startServer() {
     console.log('⏱️  Market polling loop started (5s interval)');
 
     setInterval(async () => {
-      try { await angelOne.getAngelOneSession(); }
+      try { 
+        await angelOne.getAngelOneSession(); 
+        await angelOneSocket.reconnect();
+      }
       catch (err) { console.error('[Session Refresh] Failed:', err.message); }
     }, 22 * 60 * 60 * 1000);
 

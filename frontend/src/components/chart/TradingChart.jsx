@@ -14,7 +14,7 @@ import {
   LineStyle,
 } from 'lightweight-charts';
 import { RefreshCw } from 'lucide-react';
-import api, { fetchIndicators, invalidateIndicatorCache } from '../../services/api';
+import api, { fetchIndicators, invalidateIndicatorCache, setIndicatorCache } from '../../services/api';
 import { useTheme } from '../../contexts/ThemeContext';
 
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
@@ -396,9 +396,35 @@ export default function TradingChart({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndicators]);
 
+  const allCandlesRef = useRef({});
+  const allIndicatorsRef = useRef({});
+
+  useEffect(() => {
+    allCandlesRef.current = {};
+    allIndicatorsRef.current = {};
+  }, [symbol, exchange]);
+
   // ── 3. Load historical candles ─────────────────────────────────────────────
   const loadCandles = useCallback(async () => {
     if (!symbol || !exchange) return;
+
+    const cached = allCandlesRef.current[interval];
+    if (cached) {
+      setCandles(cached);
+      onCandlesChange?.(interval, cached);
+      const tv  = cached.map(c => ({ time: toTvTime(c.timestamp), open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+      const vol = cached.map(c => ({ time: toTvTime(c.timestamp), value: +c.volume, color: c.close >= c.open ? '#22c55e22' : '#ef444422' }));
+      series.current.candle?.setData(tv);
+      series.current.volume?.setData(vol);
+      charts.current.main?.timeScale().fitContent();
+      return;
+    }
+
+    if (socket && socket.connected && Object.keys(allCandlesRef.current).length === 0) {
+      console.log('🔌 [TradingChart] Socket is active. Relying on WebSocket history stream.');
+      return;
+    }
+
     setLoading(true);
     try {
       const { data } = await api.get(`/historical/${exchange}/${symbol}/${interval}`);
@@ -416,7 +442,7 @@ export default function TradingChart({
     } finally {
       setLoading(false);
     }
-  }, [symbol, exchange, interval]);
+  }, [symbol, exchange, interval, socket, onCandlesChange]);
 
   useEffect(() => { loadCandles(); }, [loadCandles]);
 
@@ -428,20 +454,43 @@ export default function TradingChart({
       if (sym !== symbol || ex !== exchange) return;
       Object.entries(ivs).forEach(([iv, cArr]) => {
         const sorted = [...cArr].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        allCandlesRef.current[iv] = sorted;
         onCandlesChange?.(iv, sorted);
-        if (iv === interval) {
-          setCandles(sorted);
-          const tv  = sorted.map(c => ({ time: toTvTime(c.timestamp), open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
-          const vol = sorted.map(c => ({ time: toTvTime(c.timestamp), value: +c.volume, color: c.close >= c.open ? '#22c55e22' : '#ef444422' }));
-          series.current.candle?.setData(tv);
-          series.current.volume?.setData(vol);
-          charts.current.main?.timeScale().fitContent();
-        }
       });
+
+      const currentCandles = allCandlesRef.current[interval];
+      if (currentCandles) {
+        setCandles(currentCandles);
+        const tv  = currentCandles.map(c => ({ time: toTvTime(c.timestamp), open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+        const vol = currentCandles.map(c => ({ time: toTvTime(c.timestamp), value: +c.volume, color: c.close >= c.open ? '#22c55e22' : '#ef444422' }));
+        series.current.candle?.setData(tv);
+        series.current.volume?.setData(vol);
+        charts.current.main?.timeScale().fitContent();
+      }
     };
+
+    const indicatorHistoryHandler = ({ key, intervals: ivs }) => {
+      const [ex, sym] = key.split(':');
+      if (sym !== symbol || ex !== exchange) return;
+      Object.entries(ivs).forEach(([iv, indData]) => {
+        setIndicatorCache(ex, sym, iv, indData);
+        allIndicatorsRef.current[iv] = indData;
+      });
+
+      const currentIndicators = allIndicatorsRef.current[interval];
+      if (currentIndicators && candlesRef.current.length > 0) {
+        indicatorsRef.current = currentIndicators;
+        updateLegends(null);
+      }
+    };
+
     socket.on('candle_history', handler);
-    return () => socket.off('candle_history', handler);
-  }, [socket, symbol, exchange, interval]);
+    socket.on('indicator_history', indicatorHistoryHandler);
+    return () => {
+      socket.off('candle_history', handler);
+      socket.off('indicator_history', indicatorHistoryHandler);
+    };
+  }, [socket, symbol, exchange, interval, onCandlesChange]);
 
   // ── 5. Overlay indicators — fetched from backend ───────────────────────────
   useEffect(() => {
@@ -559,9 +608,15 @@ export default function TradingChart({
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ key: updKey, interval: updInterval, candle }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle, indicators: updIndicators }) => {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
+
+      if (updInterval === interval && updIndicators) {
+        setIndicatorCache(exchange, symbol, interval, updIndicators);
+        indicatorsRef.current = updIndicators;
+        allIndicatorsRef.current[interval] = updIndicators;
+      }
 
       setCandles(prev => {
         if (updInterval !== interval) return prev;
@@ -572,9 +627,8 @@ export default function TradingChart({
         } else {
           updated.push({ ...candle });
         }
+        allCandlesRef.current[interval] = updated;
         onCandlesChange?.(updInterval, updated);
-        // Invalidate indicator cache so next effect re-fetch gets fresh data
-        invalidateIndicatorCache(exchange, symbol, updInterval);
         return updated;
       });
 

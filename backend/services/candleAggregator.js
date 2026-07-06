@@ -61,7 +61,7 @@ function loadCacheFromDisk() {
           historyLoaded.set(key, val);
         }
       }
-      console.log(`✅ Loaded cache for ${candleBuffer.size} stock keys.`);
+      console.log(`✅ Loaded cache for ${Object.keys(candleBuffer).length} stock keys.`);
     }
   } catch (err) {
     console.error('Failed to load candleBuffer cache from disk:', err.message);
