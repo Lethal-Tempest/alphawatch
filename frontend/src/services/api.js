@@ -44,3 +44,9 @@ export async function fetchIndicators(exchange, symbol, interval) {
 export function invalidateIndicatorCache(exchange, symbol, interval) {
   indicatorCache.delete(`${exchange}:${symbol}:${interval}`);
 }
+
+export async function fetchIndicatorsBatch(stocks, intervals) {
+  const { data } = await api.post('/indicators/batch', { stocks, intervals });
+  if (!data?.success || !data.indicators) throw new Error('Bad batch indicators response');
+  return data.indicators;
+}

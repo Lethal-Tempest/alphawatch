@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, Minus, BarChart2, Table2, Bell, Trash2, Loader2, RefreshCw, Settings, Plus, X
 } from 'lucide-react';
-import api, { fetchIndicators, invalidateIndicatorCache } from '../../services/api';
+import api, { fetchIndicators, invalidateIndicatorCache, fetchIndicatorsBatch } from '../../services/api';
 
 const fmt2 = (n) => (n != null && !isNaN(n)) ? Number(n).toFixed(2) : '—';
 const fmtV = (n) => {
@@ -379,24 +379,17 @@ export default function WatchlistDashboard({
         // Reset indicators state
         setIndicators({});
 
-        // 2. Fetch indicators for all stocks progressively across all needed timeframes
-        current.stocks.forEach(async (s) => {
-          const key = `${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`;
-          
-          for (const tf of neededTimeframes) {
-            try {
-              const indData = await fetchIndicators(s.exchange, s.symbol, tf);
-              if (cancelled) return;
-              
-              setIndicators((prev) => ({
-                ...prev,
-                [`${key}:${tf}`]: indData,
-              }));
-            } catch (err) {
-              console.error(`Failed to fetch indicators progressively for ${key}:${tf}:`, err);
-            }
+        // 2. Fetch all indicators for all stocks and timeframes in a single batch request
+        if (neededTimeframes.length > 0 && current.stocks.length > 0) {
+          try {
+            const stockPayload = current.stocks.map((s) => ({ symbol: s.symbol, exchange: s.exchange }));
+            const batchIndicators = await fetchIndicatorsBatch(stockPayload, neededTimeframes);
+            if (cancelled) return;
+            setIndicators(batchIndicators);
+          } catch (err) {
+            console.error('Failed to fetch batch indicators:', err);
           }
-        });
+        }
       } catch (err) {
         console.error('Error loading watchlist dashboard data:', err);
         if (!cancelled) setLoading(false);

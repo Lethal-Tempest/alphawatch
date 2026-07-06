@@ -59,3 +59,65 @@ exports.getIndicators = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.getBatchIndicators = async (req, res, next) => {
+  try {
+    const { stocks, intervals } = req.body;
+    if (!Array.isArray(stocks) || !Array.isArray(intervals)) {
+      return res.status(400).json({ success: false, error: 'stocks and intervals are required arrays.' });
+    }
+
+    const results = {};
+
+    await Promise.all(
+      stocks.map(async (s) => {
+        const keyPrefix = `${s.exchange.toUpperCase()}:${s.symbol.toUpperCase()}`;
+        
+        await Promise.all(
+          intervals.map(async (interval) => {
+            try {
+              const exchange = s.exchange;
+              const symbol = s.symbol;
+              const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+
+              let candles = candleAggregator.getCandles(key, interval);
+              if (candles.length < 30) {
+                const fakeReq = { params: { exchange, symbol, interval }, priority: 'low' };
+                let resolved = false;
+                const fakeRes = {
+                  statusCode: 200,
+                  status(code) { this.statusCode = code; return this; },
+                  json(body) {
+                    if (body?.candles?.length) {
+                      candles = body.candles;
+                    }
+                    resolved = true;
+                  },
+                };
+                await getHistorical(fakeReq, fakeRes, (err) => { if (err) throw err; });
+                if (!resolved) candles = candleAggregator.getCandles(key, interval);
+              }
+
+              if (candles.length > 0) {
+                const indicators = indicatorService.computeAllIndicators(candles);
+                indicators.close = candles.map(c => +c.close);
+                indicators.open = candles.map(c => +c.open);
+                indicators.high = candles.map(c => +c.high);
+                indicators.low = candles.map(c => +c.low);
+                indicators.volume = candles.map(c => +c.volume);
+
+                results[`${keyPrefix}:${interval}`] = indicators;
+              }
+            } catch (err) {
+              console.error(`Failed to fetch indicators inside batch for ${s.exchange}:${s.symbol} at ${interval}:`, err.message);
+            }
+          })
+        );
+      })
+    );
+
+    res.json({ success: true, indicators: results });
+  } catch (error) {
+    next(error);
+  }
+};

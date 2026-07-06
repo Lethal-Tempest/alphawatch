@@ -1,7 +1,9 @@
 
-// backend/routes/indicators.js
 const express = require('express');
 const router  = express.Router();
-const { getIndicators } = require('../controllers/indicatorController');
+const { getIndicators, getBatchIndicators } = require('../controllers/indicatorController');
+
+router.post('/batch', getBatchIndicators);
 router.get('/:exchange/:symbol/:interval', getIndicators);
+
 module.exports = router;
