@@ -294,8 +294,9 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
       return;
     }
 
-    if (socket && socket.connected && Object.keys(allCandlesRef.current).length === 0) {
-      console.log('🔌 [StockDataTable] Socket is connected. Relying on WebSocket history stream.');
+    if (socket && socket.connected) {
+      console.log(`🔌 [StockDataTable] Requesting history for ${iv} over WebSocket.`);
+      socket.emit('subscribe', { symbol: sym, exchange: exch, interval: iv });
       setLoading(true);
       setError(null);
       return;

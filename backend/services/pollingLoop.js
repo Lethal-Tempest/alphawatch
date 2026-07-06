@@ -19,7 +19,6 @@ const alertEngine      = require('./alertEngine');
 const User             = require('../models/User');
 const Watchlist        = require('../models/Watchlist');
 const autoTradeEngine  = require('./autoTradeEngine');
-const indicatorService = require('./indicatorService');
 
 // Set of "EXCHANGE:SYMBOL" keys currently being polled
 const activeSubscriptions = new Set();
@@ -74,18 +73,10 @@ exports.init = (io) => {
         lastBroadcastCandle[key][interval] = { ...latest };
 
         if (activeSubscriptions.has(key)) {
-          const indicators = indicatorService.computeAllIndicators(candles);
-          indicators.close = candles.map(c => +c.close);
-          indicators.open = candles.map(c => +c.open);
-          indicators.high = candles.map(c => +c.high);
-          indicators.low = candles.map(c => +c.low);
-          indicators.volume = candles.map(c => +c.volume);
-
           ioInstance.to(`ticker:${key}`).emit('candle_update', {
             key,
             interval,
             candle: latest,
-            indicators,
           });
         }
       }

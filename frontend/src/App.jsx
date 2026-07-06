@@ -236,8 +236,8 @@ export default function App() {
       setAllCandles({});
     }
     setActiveView({ symbol, exchange, mode: 'chart' });
-    if (socket) socket.emit('subscribe', { symbol, exchange });
-  }, [activeView, socket]);
+    if (socket) socket.emit('subscribe', { symbol, exchange, interval: currentInterval });
+  }, [activeView, socket, currentInterval]);
 
   const handleOpenTable = useCallback((symbol, exchange) => {
     if (activeView?.symbol !== symbol || activeView?.exchange !== exchange) {
@@ -246,8 +246,8 @@ export default function App() {
       }
     }
     setActiveView({ symbol, exchange, mode: 'table' });
-    if (socket) socket.emit('subscribe', { symbol, exchange });
-  }, [activeView, socket]);
+    if (socket) socket.emit('subscribe', { symbol, exchange, interval: currentInterval });
+  }, [activeView, socket, currentInterval]);
 
   const handleOpenAlert = useCallback((symbol, exchange) => {
     setActiveAlertStock({ symbol, exchange });
@@ -256,9 +256,9 @@ export default function App() {
 
   useEffect(() => {
     if (socket && connected && activeView) {
-      socket.emit('subscribe', { symbol: activeView.symbol, exchange: activeView.exchange });
+      socket.emit('subscribe', { symbol: activeView.symbol, exchange: activeView.exchange, interval: currentInterval });
     }
-  }, [socket, connected, activeView]);
+  }, [socket, connected, activeView, currentInterval]);
 
   // Subscribe to all stocks in the active watchlist
   useEffect(() => {

@@ -65,7 +65,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('subscribe', async ({ symbol, exchange }) => {
+  socket.on('subscribe', async ({ symbol, exchange, interval }) => {
     if (!symbol || !exchange) return;
     const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
     socket.join(`ticker:${key}`);
@@ -74,25 +74,18 @@ io.on('connection', (socket) => {
     const liveTick = polling.getLiveState(key);
     if (liveTick) socket.emit('tick', liveTick);
 
-    // Fetch and populate historical candles for all intervals if needed, and pre-calculate indicators
-    try {
-      const intervals = Object.keys(candleAggregator.INTERVAL_MS);
-      await Promise.all(
-        intervals.map(async (interval) => {
-          if (!candleAggregator.hasHistory(key, interval)) {
-            await candleAggregator.getOrFetchHistory(key, exchange, symbol, interval, () =>
-              angelOne.fetchHistoricalCandles(exchange, symbol, interval, 'low')
-            );
-          }
-        })
-      );
+    // Only load and emit historical/indicator data if an interval is requested (e.g. chart/table load, not watchlist)
+    if (interval) {
+      try {
+        if (!candleAggregator.hasHistory(key, interval)) {
+          await candleAggregator.getOrFetchHistory(key, exchange, symbol, interval, () =>
+            angelOne.fetchHistoricalCandles(exchange, symbol, interval, 'low')
+          );
+        }
 
-      const history = {};
-      const indicatorsHistory = {};
-      for (const interval of intervals) {
         const candles = candleAggregator.getCandles(key, interval);
         if (candles.length > 0) {
-          history[interval] = candles;
+          socket.emit('candle_history', { key, intervals: { [interval]: candles } });
           
           // Pre-calculate indicators
           const indicators = indicatorService.computeAllIndicators(candles);
@@ -101,19 +94,14 @@ io.on('connection', (socket) => {
           indicators.high = candles.map(c => +c.high);
           indicators.low = candles.map(c => +c.low);
           indicators.volume = candles.map(c => +c.volume);
-          indicatorsHistory[interval] = indicators;
+          socket.emit('indicator_history', { key, intervals: { [interval]: indicators } });
         }
+      } catch (err) {
+        console.error(`❌ [Socket Subscribe] Failed to load history for ${key} at ${interval}:`, err.message);
       }
-
-      if (Object.keys(history).length > 0) {
-        socket.emit('candle_history', { key, intervals: history });
-        socket.emit('indicator_history', { key, intervals: indicatorsHistory });
-      }
-    } catch (err) {
-      console.error(`❌ [Socket Subscribe] Failed to load history for ${key}:`, err.message);
     }
 
-    console.log(`📈 ${socket.id} subscribed to ${key}`);
+    console.log(`📈 ${socket.id} subscribed to ${key} (interval: ${interval || 'none'})`);
   });
 
   socket.on('unsubscribe', ({ symbol, exchange }) => {

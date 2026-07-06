@@ -420,8 +420,9 @@ export default function TradingChart({
       return;
     }
 
-    if (socket && socket.connected && Object.keys(allCandlesRef.current).length === 0) {
-      console.log('🔌 [TradingChart] Socket is active. Relying on WebSocket history stream.');
+    if (socket && socket.connected) {
+      console.log(`🔌 [TradingChart] Requesting history for ${interval} over WebSocket.`);
+      socket.emit('subscribe', { symbol, exchange, interval });
       return;
     }
 
@@ -608,15 +609,9 @@ export default function TradingChart({
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ key: updKey, interval: updInterval, candle, indicators: updIndicators }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle }) => {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
-
-      if (updInterval === interval && updIndicators) {
-        setIndicatorCache(exchange, symbol, interval, updIndicators);
-        indicatorsRef.current = updIndicators;
-        allIndicatorsRef.current[interval] = updIndicators;
-      }
 
       setCandles(prev => {
         if (updInterval !== interval) return prev;

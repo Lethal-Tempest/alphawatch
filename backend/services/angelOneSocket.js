@@ -39,6 +39,21 @@ exports.connect = async () => {
     wsConnected = true;
     console.log('✅ [WebSocket] Smart Stream connected successfully.');
 
+    // Drain any pending subscriptions that queued during connection setup
+    webSocketClient.on('open', () => {
+      wsConnected = true;
+    });
+
+    webSocketClient.on('close', () => {
+      wsConnected = false;
+      console.log('🔌 [WebSocket] Smart Stream disconnected.');
+    });
+
+    webSocketClient.on('error', (err) => {
+      wsConnected = false;
+      console.error('❌ [WebSocket] Smart Stream error:', err?.message || err);
+    });
+
     // Handle ticks
     webSocketClient.on('tick', (data) => {
       if (!data || !data.token) return;
@@ -164,6 +179,19 @@ exports.syncSubscriptions = (allKeys) => {
 
 function sendSubscriptionRequest(action, exchangeType, tokens) {
   try {
+    // Guard: Only send if WebSocket is actually open (readyState 1)
+    // The Angel One SDK uses an internal timer that can fire before the connection is ready.
+    if (!webSocketClient || !wsConnected) {
+      console.warn('⚠️  [WebSocket] Skipping subscription request — socket not open yet.');
+      return;
+    }
+
+    const underlying = webSocketClient._ws || webSocketClient.ws;
+    if (underlying && underlying.readyState !== 1) {
+      console.warn(`⚠️  [WebSocket] Skipping subscription — readyState is ${underlying.readyState} (not OPEN).`);
+      return;
+    }
+
     const req = {
       correlationID: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       action,
