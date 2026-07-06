@@ -51,8 +51,8 @@ export function setIndicatorCache(exchange, symbol, interval, data) {
   indicatorCache.set(cacheKey, { data, fetchedAt: Date.now() });
 }
 
-export async function fetchIndicatorsBatch(stocks, intervals) {
-  const { data } = await api.post('/indicators/batch', { stocks, intervals });
+export async function fetchIndicatorsBatch(stocks, intervals, neededKeys = []) {
+  const { data } = await api.post('/indicators/batch', { stocks, intervals, neededKeys });
   if (!data?.success || !data.indicators) throw new Error('Bad batch indicators response');
   return data.indicators;
 }

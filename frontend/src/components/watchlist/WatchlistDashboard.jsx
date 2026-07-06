@@ -366,24 +366,23 @@ export default function WatchlistDashboard({
         // Set loading to false early so user sees prices instantly in msec!
         setLoading(false);
 
-        // Determine all unique timeframes referenced in the formula to progressively fetch indicators
+        // Determine all unique timeframes AND indicator keys referenced in the formula
         const conditions = convertLegacyScoreConditions(activeConditions);
-        const neededTimeframes = Array.from(
-          new Set(
-            conditions
-              .filter((c) => c.type === 'operand' && c.valueType === 'indicator' && c.timeframe)
-              .map((c) => c.timeframe)
-          )
+        const indicatorOperands = conditions.filter(
+          (c) => c.type === 'operand' && c.valueType === 'indicator' && c.timeframe
         );
+        const neededTimeframes = Array.from(new Set(indicatorOperands.map((c) => c.timeframe)));
+        // Collect the specific indicator names used — sent to backend for selective computation
+        const neededKeys = Array.from(new Set(indicatorOperands.map((c) => c.indicator)));
 
         // Reset indicators state
         setIndicators({});
 
-        // 2. Fetch all indicators for all stocks and timeframes in a single batch request
+        // 2. Fetch ONLY the needed indicators for all stocks and timeframes in one batch request
         if (neededTimeframes.length > 0 && current.stocks.length > 0) {
           try {
             const stockPayload = current.stocks.map((s) => ({ symbol: s.symbol, exchange: s.exchange }));
-            const batchIndicators = await fetchIndicatorsBatch(stockPayload, neededTimeframes);
+            const batchIndicators = await fetchIndicatorsBatch(stockPayload, neededTimeframes, neededKeys);
             if (cancelled) return;
             setIndicators(batchIndicators);
           } catch (err) {
@@ -449,43 +448,21 @@ export default function WatchlistDashboard({
     };
   }, [socket]);
 
-  // ── Handle real-time candle updates to refresh indicators ──
+  // ── Handle real-time candle updates: update indicator cache in-place (no HTTP) ──
   useEffect(() => {
     if (!socket) return;
-
-    const conditions = convertLegacyScoreConditions(activeConditions);
-    const neededTimeframes = Array.from(
-      new Set(
-        conditions
-          .filter((c) => c.type === 'operand' && c.valueType === 'indicator' && c.timeframe)
-          .map((c) => c.timeframe)
-      )
-    );
-
-    const handleCandleUpdate = async (data) => {
-      // data: { key, interval, candle }
-      if (!neededTimeframes.includes(data.interval)) return;
+    // When a candle updates, indicators may be stale — but we do NOT re-fetch via HTTP
+    // (that was the expensive loop). Instead, React will pick up the updated quote
+    // values from the tick stream, and the next manual refresh / periodic re-score
+    // will re-fetch batch indicators. This avoids N HTTP calls per tick.
+    // Invalidate cache only so the next fetchIndicators call gets fresh data.
+    const handleCandleUpdate = (data) => {
       const [exchange, symbol] = data.key.split(':');
-      const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
-      
-      try {
-        invalidateIndicatorCache(exchange, symbol, data.interval);
-        const indData = await fetchIndicators(exchange, symbol, data.interval);
-        
-        setIndicators((prev) => ({
-          ...prev,
-          [`${key}:${data.interval}`]: indData,
-        }));
-      } catch (err) {
-        console.error(`Failed to refresh indicator on candle update for ${data.key}:${data.interval}:`, err);
-      }
+      invalidateIndicatorCache(exchange, symbol, data.interval);
     };
-
     socket.on('candle_update', handleCandleUpdate);
-    return () => {
-      socket.off('candle_update', handleCandleUpdate);
-    };
-  }, [socket, activeConditions]);
+    return () => socket.off('candle_update', handleCandleUpdate);
+  }, [socket]);
 
   // ── Helper to retrieve indicator/value ──
   const getIndicatorValue = (stockKey, tf, type, valOrIndicator, isPrev = false) => {
@@ -708,31 +685,150 @@ export default function WatchlistDashboard({
     return score;
   };
 
+  // ── Compile AST to a native JS function once (JIT) for fast per-stock scoring ──
+  // Instead of re-walking the AST tree for every stock, we compile it to a
+  // JavaScript string and use new Function() so V8 can JIT-compile it.
+  // The compiled function is memoized — only recomputed when conditions change.
+  const compiledScoreFunction = useMemo(() => {
+    if (!current?.assignedScoringSystemId || !activeConditions || activeConditions.length === 0) {
+      return null;
+    }
+    const conditions = convertLegacyScoreConditions(activeConditions);
+    if (!conditions.length) return null;
+
+    const statements = parseTokensToAST(conditions);
+
+    // Compile an AST node to a JS expression string
+    function compileExpr(tokens, scoreVarName) {
+      const parts = tokens.map(t => {
+        if (t.type === 'keyword' && t.valueStr === 'score') return scoreVarName;
+        if (t.type === 'operand') {
+          if (t.valueType === 'value') return String(parseFloat(t.value ?? 0));
+          // isPrev will be passed as a param: getInd(tf, key, false) or getInd(tf, key, true)
+          return `_getInd(${JSON.stringify(t.timeframe)}, ${JSON.stringify(t.indicator)}, false)`;
+        }
+        return t.valueStr || t.raw || '';
+      });
+      return parts.join(' ');
+    }
+
+    function compilePrevExpr(tokens, scoreVarName) {
+      const parts = tokens.map(t => {
+        if (t.type === 'keyword' && t.valueStr === 'score') return scoreVarName;
+        if (t.type === 'operand') {
+          if (t.valueType === 'value') return String(parseFloat(t.value ?? 0));
+          return `_getInd(${JSON.stringify(t.timeframe)}, ${JSON.stringify(t.indicator)}, true)`;
+        }
+        return t.valueStr || t.raw || '';
+      });
+      return parts.join(' ');
+    }
+
+    function compileCondition(exprTokens) {
+      const compOps = ['crossover', 'crossunder', '>=', '<=', '==', '!=', '>', '<'];
+      let compOpIdx = -1;
+      let compOp = null;
+      for (let i = 0; i < exprTokens.length; i++) {
+        const raw = (exprTokens[i].valueStr || exprTokens[i].raw || '').toLowerCase();
+        if (compOps.includes(raw)) { compOpIdx = i; compOp = raw; break; }
+      }
+      if (compOpIdx !== -1) {
+        const left  = exprTokens.slice(0, compOpIdx);
+        const right = exprTokens.slice(compOpIdx + 1);
+        const lExpr   = compileExpr(left, '_score');
+        const rExpr   = compileExpr(right, '_score');
+        const lPrev   = compilePrevExpr(left, '_score');
+        const rPrev   = compilePrevExpr(right, '_score');
+        switch (compOp) {
+          case 'crossover':  return `((${lExpr}) >= (${rExpr}) && (${lPrev}) < (${rPrev}))`;
+          case 'crossunder': return `((${lExpr}) <= (${rExpr}) && (${lPrev}) > (${rPrev}))`;
+          default: return `((${lExpr}) ${compOp} (${rExpr}))`;
+        }
+      }
+      return compileExpr(exprTokens, '_score');
+    }
+
+    let lines = [];
+    function compileStmts(stmtList, indent) {
+      const pad = '  '.repeat(indent);
+      for (const stmt of stmtList) {
+        if (stmt.type === 'assignment') {
+          lines.push(`${pad}_score = (${compileExpr(stmt.expression, '_score')});`);
+        } else if (stmt.type === 'expression') {
+          const expr = compileExpr(stmt.expression, '_score');
+          if (expr.trim()) lines.push(`${pad}_score = (${expr});`);
+        } else if (stmt.type === 'if') {
+          for (let b = 0; b < stmt.branches.length; b++) {
+            const cond = compileCondition(stmt.branches[b].condition);
+            lines.push(`${pad}${b === 0 ? 'if' : 'else if'} (${cond}) {`);
+            compileStmts(stmt.branches[b].body, indent + 1);
+            lines.push(`${pad}}`);
+          }
+          if (stmt.elseBody) {
+            lines.push(`${pad}else {`);
+            compileStmts(stmt.elseBody, indent + 1);
+            lines.push(`${pad}}`);
+          }
+        }
+      }
+    }
+
+    compileStmts(statements, 0);
+    const body = `'use strict';\nlet _score = 0;\n${lines.join('\n')}\nreturn _score;`;
+
+    try {
+      // eslint-disable-next-line no-new-func
+      return new Function('_getInd', body);
+    } catch (e) {
+      console.error('[WatchlistDashboard] Formula compile error:', e.message);
+      return null;
+    }
+  }, [current?.assignedScoringSystemId, activeConditions]);
+
   // ── Sort stocks by score descending ──
   const sortedStocks = useMemo(() => {
     if (!current?.stocks) return [];
 
-    if (!current?.assignedScoringSystemId || !activeConditions || activeConditions.length === 0) {
+    if (!compiledScoreFunction) {
       return current.stocks.map((stock) => ({
         ...stock,
         score: 0,
       }));
     }
 
-    const statements = parseTokensToAST(activeConditions);
-
     const stocksWithScore = current.stocks.map((stock) => {
-      const key = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
-      const score = executeStatements(statements, key);
-      
-      return {
-        ...stock,
-        score,
+      const stockKey = `${stock.exchange.toUpperCase()}:${stock.symbol.toUpperCase()}`;
+      const quote = quotes[stockKey];
+
+      // Fast indicator lookup: close array value at last or second-to-last index
+      const getInd = (tf, indicatorName, isPrev) => {
+        if (!isPrev) {
+          if (indicatorName === 'close' || indicatorName === 'ltp') return quote?.ltp ?? 0;
+          if (indicatorName === 'open')   return quote?.open   ?? 0;
+          if (indicatorName === 'high')   return quote?.high   ?? 0;
+          if (indicatorName === 'low')    return quote?.low    ?? 0;
+          if (indicatorName === 'volume') return quote?.volume ?? 0;
+        }
+        const indObj = indicators[`${stockKey}:${tf}`];
+        if (!indObj) return 0;
+        const arr = indObj[indicatorName];
+        if (!arr || !arr.length) return 0;
+        const idx = isPrev ? arr.length - 2 : arr.length - 1;
+        const v = arr[idx];
+        return v != null && !isNaN(v) ? v : 0;
       };
+
+      let score = 0;
+      try {
+        score = compiledScoreFunction(getInd);
+      } catch (e) {
+        // formula runtime error for this stock — skip silently
+      }
+      return { ...stock, score };
     });
 
     return [...stocksWithScore].sort((a, b) => b.score - a.score);
-  }, [current?.stocks, current?.assignedScoringSystemId, activeConditions, quotes, indicators]);
+  }, [current?.stocks, current?.assignedScoringSystemId, compiledScoreFunction, quotes, indicators]);
 
   // ── Formula management handlers ──
   const handleAddToken = (token) => {

@@ -219,6 +219,220 @@ const computeAllIndicators = (candles) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// computeSelectedIndicators
+//
+// Like computeAllIndicators but only runs computations for the indicator
+// keys actually needed. For a formula using 5 of 60+ indicators, this
+// eliminates ~90% of CPU work compared to computeAllIndicators.
+//
+// neededKeys: Set<string> of indicator names referenced by the formula
+//   e.g. new Set(['macdLine', 'smiLine', 'smiSignal', 'ema50', 'mfi14', 'adx'])
+// ─────────────────────────────────────────────────────────────────────────────
+const computeSelectedIndicators = (candles, neededKeys) => {
+  if (!neededKeys || neededKeys.size === 0) {
+    return computeAllIndicators(candles);
+  }
+
+  const n = candles.length;
+  const closes = candles.map(c => +c.close);
+  const highs   = candles.map(c => +c.high);
+  const lows    = candles.map(c => +c.low);
+  const volumes = candles.map(c => +c.volume);
+
+  const result = {};
+
+  // Always include OHLCV (used for base indicators and lookups)
+  const needsOHLCV = (k) => ['close', 'open', 'high', 'low', 'volume'].includes(k);
+  if ([...neededKeys].some(needsOHLCV)) {
+    result.close  = closes;
+    result.open   = candles.map(c => +c.open);
+    result.high   = highs;
+    result.low    = lows;
+    result.volume = volumes;
+  }
+
+  const getDeltas = (arr) => {
+    if (!arr || !arr.length) return [null, null];
+    const d1 = arr.map((v, i) =>
+      i > 0 && v !== null && arr[i - 1] !== null ? nullSafe(v - arr[i - 1]) : null
+    );
+    const d2 = d1.map((v, i) =>
+      i > 0 && v !== null && d1[i - 1] !== null ? nullSafe(v - d1[i - 1]) : null
+    );
+    return [d1, d2];
+  };
+
+  const smaOf = (period) =>
+    padLeft(ti.SMA.calculate({ values: closes, period }).map(nullSafe), n);
+  const emaOf = (period) =>
+    padLeft(ti.EMA.calculate({ values: closes, period }).map(nullSafe), n);
+
+  // ── SMA groups ────────────────────────────────────────────────────────────
+  for (const [period, base] of [[20,'sma20'],[50,'sma50'],[100,'sma100'],[200,'sma200']]) {
+    const needBase  = neededKeys.has(base);
+    const needDelta = neededKeys.has(`delta${base.charAt(0).toUpperCase()}${base.slice(1)}`);
+    const needD2    = neededKeys.has(`deltaSq${base.charAt(0).toUpperCase()}${base.slice(1)}`);
+    if (needBase || needDelta || needD2) {
+      const arr = smaOf(period);
+      if (needBase)  result[base] = arr;
+      if (needDelta || needD2) {
+        const [d1, d2] = getDeltas(arr);
+        const dKey  = `delta${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+        const d2Key = `deltaSq${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+        if (needDelta) result[dKey]  = d1;
+        if (needD2)    result[d2Key] = d2;
+      }
+    }
+  }
+
+  // ── EMA groups ────────────────────────────────────────────────────────────
+  for (const [period, base] of [[20,'ema20'],[50,'ema50'],[100,'ema100'],[200,'ema200']]) {
+    const needBase  = neededKeys.has(base);
+    const needDelta = neededKeys.has(`delta${base.charAt(0).toUpperCase()}${base.slice(1)}`);
+    const needD2    = neededKeys.has(`deltaSq${base.charAt(0).toUpperCase()}${base.slice(1)}`);
+    if (needBase || needDelta || needD2) {
+      const arr = emaOf(period);
+      if (needBase)  result[base] = arr;
+      if (needDelta || needD2) {
+        const [d1, d2] = getDeltas(arr);
+        const dKey  = `delta${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+        const d2Key = `deltaSq${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+        if (needDelta) result[dKey]  = d1;
+        if (needD2)    result[d2Key] = d2;
+      }
+    }
+  }
+
+  // ── RSI ───────────────────────────────────────────────────────────────────
+  if (neededKeys.has('rsi14') || neededKeys.has('deltaRsi14') || neededKeys.has('deltaSqRsi14')) {
+    const arr = padLeft(ti.RSI.calculate({ values: closes, period: 14 }).map(nullSafe), n);
+    if (neededKeys.has('rsi14')) result.rsi14 = arr;
+    if (neededKeys.has('deltaRsi14') || neededKeys.has('deltaSqRsi14')) {
+      const [d1, d2] = getDeltas(arr);
+      if (neededKeys.has('deltaRsi14'))   result.deltaRsi14   = d1;
+      if (neededKeys.has('deltaSqRsi14')) result.deltaSqRsi14 = d2;
+    }
+  }
+
+  // ── Bollinger Bands ───────────────────────────────────────────────────────
+  const needsBB = ['bbUpper','bbMiddle','bbLower','deltaBbUpper','deltaBbMiddle','deltaBbLower',
+    'deltaSqBbUpper','deltaSqBbMiddle','deltaSqBbLower'].some(k => neededKeys.has(k));
+  if (needsBB) {
+    const bbRaw = ti.BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
+    const bbUpper  = padLeft(bbRaw.map(b => nullSafe(b.upper)),  n);
+    const bbMiddle = padLeft(bbRaw.map(b => nullSafe(b.middle)), n);
+    const bbLower  = padLeft(bbRaw.map(b => nullSafe(b.lower)),  n);
+    if (neededKeys.has('bbUpper'))  result.bbUpper  = bbUpper;
+    if (neededKeys.has('bbMiddle')) result.bbMiddle = bbMiddle;
+    if (neededKeys.has('bbLower'))  result.bbLower  = bbLower;
+    for (const [arr, base] of [[bbUpper,'BbUpper'],[bbMiddle,'BbMiddle'],[bbLower,'BbLower']]) {
+      const dKey = `delta${base}`; const d2Key = `deltaSq${base}`;
+      if (neededKeys.has(dKey) || neededKeys.has(d2Key)) {
+        const [d1, d2] = getDeltas(arr);
+        if (neededKeys.has(dKey))  result[dKey]  = d1;
+        if (neededKeys.has(d2Key)) result[d2Key] = d2;
+      }
+    }
+  }
+
+  // ── MACD ──────────────────────────────────────────────────────────────────
+  const needsMACD = ['macdLine','macdSignal','macdHist','deltaMacdLine','deltaMacdSignal',
+    'deltaMacdHist','deltaSqMacdLine','deltaSqMacdSignal','deltaSqMacdHist','deltaMACD'].some(k => neededKeys.has(k));
+  if (needsMACD) {
+    const macdRaw = ti.MACD.calculate({
+      values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9,
+      SimpleMAOscillator: false, SimpleMASignal: false,
+    });
+    const macdLine   = padLeft(macdRaw.map(m => nullSafe(m.MACD)),      n);
+    const macdSignal = padLeft(macdRaw.map(m => nullSafe(m.signal)),    n);
+    const macdHist   = padLeft(macdRaw.map(m => nullSafe(m.histogram)), n);
+    if (neededKeys.has('macdLine'))   result.macdLine   = macdLine;
+    if (neededKeys.has('macdSignal')) result.macdSignal = macdSignal;
+    if (neededKeys.has('macdHist'))   result.macdHist   = macdHist;
+    for (const [arr, base, legacyKey] of [
+      [macdLine, 'MacdLine', 'deltaMACD'],
+      [macdSignal, 'MacdSignal', null],
+      [macdHist, 'MacdHist', null],
+    ]) {
+      const dKey = `delta${base}`; const d2Key = `deltaSq${base}`;
+      if (neededKeys.has(dKey) || neededKeys.has(d2Key) || (legacyKey && neededKeys.has(legacyKey))) {
+        const [d1, d2] = getDeltas(arr);
+        if (neededKeys.has(dKey))  result[dKey]  = d1;
+        if (neededKeys.has(d2Key)) result[d2Key] = d2;
+        if (legacyKey && neededKeys.has(legacyKey)) result[legacyKey] = d1;
+      }
+    }
+  }
+
+  // ── ADX / DI ──────────────────────────────────────────────────────────────
+  const needsADX = ['adx','plusDI','minusDI','di','deltaADX','deltaPlusDI','deltaMinusDI',
+    'deltaDI','deltaSqADX','deltaSqPlusDI','deltaSqMinusDI','deltaSqDI'].some(k => neededKeys.has(k));
+  if (needsADX) {
+    const adxRaw = ti.ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+    const adx     = padLeft(adxRaw.map(a => nullSafe(a.adx)), n);
+    const plusDI  = padLeft(adxRaw.map(a => nullSafe(a.pdi)), n);
+    const minusDI = padLeft(adxRaw.map(a => nullSafe(a.mdi)), n);
+    const di      = plusDI.map((p, i) =>
+      p !== null && minusDI[i] !== null ? nullSafe(p - minusDI[i]) : null
+    );
+    if (neededKeys.has('adx'))     result.adx     = adx;
+    if (neededKeys.has('plusDI'))  result.plusDI  = plusDI;
+    if (neededKeys.has('minusDI')) result.minusDI = minusDI;
+    if (neededKeys.has('di'))      result.di      = di;
+    for (const [arr, base] of [[adx,'ADX'],[plusDI,'PlusDI'],[minusDI,'MinusDI'],[di,'DI']]) {
+      const dKey = `delta${base}`; const d2Key = `deltaSq${base}`;
+      if (neededKeys.has(dKey) || neededKeys.has(d2Key)) {
+        const [d1, d2] = getDeltas(arr);
+        if (neededKeys.has(dKey))  result[dKey]  = d1;
+        if (neededKeys.has(d2Key)) result[d2Key] = d2;
+      }
+    }
+  }
+
+  // ── MFI ───────────────────────────────────────────────────────────────────
+  if (neededKeys.has('mfi14') || neededKeys.has('deltaMfi14') || neededKeys.has('deltaSqMfi14')) {
+    const arr = padLeft(computeMFI(candles, 14).map(nullSafe), n);
+    if (neededKeys.has('mfi14')) result.mfi14 = arr;
+    if (neededKeys.has('deltaMfi14') || neededKeys.has('deltaSqMfi14')) {
+      const [d1, d2] = getDeltas(arr);
+      if (neededKeys.has('deltaMfi14'))   result.deltaMfi14   = d1;
+      if (neededKeys.has('deltaSqMfi14')) result.deltaSqMfi14 = d2;
+    }
+  }
+
+  // ── SMI ───────────────────────────────────────────────────────────────────
+  const needsSMI = ['smiLine','smiSignal','smiDist','deltaSmiLine','deltaSmiSignal','deltaSmiDist',
+    'deltaSqSmiLine','deltaSqSmiSignal','deltaSqSmiDist','deltaSMI','deltaSMISignal','deltaSMIDist'].some(k => neededKeys.has(k));
+  if (needsSMI) {
+    const smiResult = computeSMI(candles);
+    const smiLine   = smiResult.smi.map(nullSafe);
+    const smiSignal = smiResult.signal.map(nullSafe);
+    const smiDist   = smiLine.map((v, i) =>
+      v !== null && smiSignal[i] !== null ? nullSafe(v - smiSignal[i]) : null
+    );
+    if (neededKeys.has('smiLine'))   result.smiLine   = smiLine;
+    if (neededKeys.has('smiSignal')) result.smiSignal = smiSignal;
+    if (neededKeys.has('smiDist'))   result.smiDist   = smiDist;
+    for (const [arr, base, legacyKey] of [
+      [smiLine,   'SmiLine',   'deltaSMI'],
+      [smiSignal, 'SmiSignal', 'deltaSMISignal'],
+      [smiDist,   'SmiDist',   'deltaSMIDist'],
+    ]) {
+      const dKey = `delta${base}`; const d2Key = `deltaSq${base}`;
+      if (neededKeys.has(dKey) || neededKeys.has(d2Key) || (legacyKey && neededKeys.has(legacyKey))) {
+        const [d1, d2] = getDeltas(arr);
+        if (neededKeys.has(dKey))  result[dKey]  = d1;
+        if (neededKeys.has(d2Key)) result[d2Key] = d2;
+        if (legacyKey && neededKeys.has(legacyKey)) result[legacyKey] = d1;
+      }
+    }
+  }
+
+  return result;
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stochastic Momentum Index (TradingView Parity)
 // ─────────────────────────────────────────────────────────────────────────────
 function computeSMI(candles, period = 10, smooth1 = 3, smooth2 = 3, signalPeriod = 10) {
@@ -316,6 +530,7 @@ module.exports = {
   calculateRSI,
   calculateSMA,
   computeAllIndicators,
+  computeSelectedIndicators,
   computeSMI,
   computeMFI
 };

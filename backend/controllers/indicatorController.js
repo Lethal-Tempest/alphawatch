@@ -62,10 +62,16 @@ exports.getIndicators = async (req, res, next) => {
 
 exports.getBatchIndicators = async (req, res, next) => {
   try {
-    const { stocks, intervals } = req.body;
+    const { stocks, intervals, neededKeys } = req.body;
     if (!Array.isArray(stocks) || !Array.isArray(intervals)) {
       return res.status(400).json({ success: false, error: 'stocks and intervals are required arrays.' });
     }
+
+    // Build a Set of needed indicator keys for selective computation
+    // If not provided, fall back to computing all (backward compat)
+    const keySet = Array.isArray(neededKeys) && neededKeys.length > 0
+      ? new Set(neededKeys)
+      : null;
 
     const results = {};
 
@@ -99,12 +105,17 @@ exports.getBatchIndicators = async (req, res, next) => {
               }
 
               if (candles.length > 0) {
-                const indicators = indicatorService.computeAllIndicators(candles);
-                indicators.close = candles.map(c => +c.close);
-                indicators.open = candles.map(c => +c.open);
-                indicators.high = candles.map(c => +c.high);
-                indicators.low = candles.map(c => +c.low);
-                indicators.volume = candles.map(c => +c.volume);
+                // Use selective computation when neededKeys provided (much faster)
+                const indicators = keySet
+                  ? indicatorService.computeSelectedIndicators(candles, keySet)
+                  : indicatorService.computeAllIndicators(candles);
+
+                // Always include OHLCV arrays for live value lookups
+                if (!indicators.close)  indicators.close  = candles.map(c => +c.close);
+                if (!indicators.open)   indicators.open   = candles.map(c => +c.open);
+                if (!indicators.high)   indicators.high   = candles.map(c => +c.high);
+                if (!indicators.low)    indicators.low    = candles.map(c => +c.low);
+                if (!indicators.volume) indicators.volume = candles.map(c => +c.volume);
 
                 results[`${keyPrefix}:${interval}`] = indicators;
               }
@@ -121,3 +132,4 @@ exports.getBatchIndicators = async (req, res, next) => {
     next(error);
   }
 };
+
