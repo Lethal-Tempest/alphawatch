@@ -12,6 +12,7 @@ import StockDataTable  from './components/datatable/Stockdatatable';
 import WatchlistDashboard from './components/watchlist/WatchlistDashboard';
 import BacktestDashboard from './components/backtest/BacktestDashboard';
 import AutoTradeDashboard from './components/autotrade/AutoTradeDashboard';
+import AiAssistant from './components/agent/AiAssistant';
 import { useSocket }   from './services/useSocket';
 import { useTheme }    from './contexts/ThemeContext';
 import api             from './services/api';
@@ -145,11 +146,22 @@ export default function App() {
 
   const [user, setUser]                   = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [activeView, setActiveView]       = useState(null);
+  const [activeView, setActiveView]       = useState(() => {
+    try {
+      const saved = localStorage.getItem('aw_active_view');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [watchlists, setWatchlists]       = useState([]);
-  const [selectedWatchlistId, setSelectedWatchlistId] = useState('');
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState(
+    () => localStorage.getItem('aw_selected_watchlist_id') || ''
+  );
   const [newWatchlistName, setNewWatchlistName] = useState('');
-  const [activeMainTab, setActiveMainTab]       = useState('watchlist');
+  const [activeMainTab, setActiveMainTab]       = useState(
+    () => localStorage.getItem('aw_active_main_tab') || 'watchlist'
+  );
 
   // Alerts sidebar state
   const [showAlertsSidebar, setShowAlertsSidebar] = useState(false);
@@ -174,6 +186,26 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('aw_indicators', JSON.stringify(activeIndicators));
   }, [activeIndicators]);
+
+  useEffect(() => {
+    if (activeView) {
+      localStorage.setItem('aw_active_view', JSON.stringify(activeView));
+    } else {
+      localStorage.removeItem('aw_active_view');
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    if (selectedWatchlistId) {
+      localStorage.setItem('aw_selected_watchlist_id', selectedWatchlistId);
+    } else {
+      localStorage.removeItem('aw_selected_watchlist_id');
+    }
+  }, [selectedWatchlistId]);
+
+  useEffect(() => {
+    localStorage.setItem('aw_active_main_tab', activeMainTab);
+  }, [activeMainTab]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -203,9 +235,16 @@ export default function App() {
   const fetchWatchlists = async () => {
     try {
       const { data } = await api.get('/watchlists');
-      setWatchlists(data.watchlists || []);
-      if (data.watchlists?.length > 0 && !selectedWatchlistId) {
-        setSelectedWatchlistId(data.watchlists[0]._id);
+      const list = data.watchlists || [];
+      setWatchlists(list);
+
+      const persistedWlId = localStorage.getItem('aw_selected_watchlist_id');
+      if (list.length > 0) {
+        if (persistedWlId && list.some(w => w._id === persistedWlId)) {
+          setSelectedWatchlistId(persistedWlId);
+        } else if (!selectedWatchlistId || !list.some(w => w._id === selectedWatchlistId)) {
+          setSelectedWatchlistId(list[0]._id);
+        }
       }
     } catch {}
   };
@@ -650,6 +689,13 @@ export default function App() {
 
       {showAuthModal && (
         <AuthModal onSuccess={handleAuthSuccess} onClose={() => setShowAuthModal(false)} />
+      )}
+
+      {user && (
+        <AiAssistant
+          currentWatchlistId={selectedWatchlistId}
+          onWatchlistsChange={fetchWatchlists}
+        />
       )}
     </div>
   );

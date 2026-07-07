@@ -474,4 +474,6 @@ router.delete('/scoring-systems/:id', async (req, res, next) => {
   }
 });
 
+router.parseFormulaString = parseFormulaString;
 module.exports = router;
+
