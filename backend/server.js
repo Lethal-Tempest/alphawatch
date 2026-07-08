@@ -47,7 +47,15 @@ app.use('/api/agent',       require('./routes/agent'));
 app.use(errorHandler);
 
 // Health Check Endpoint (keeps server alive on Render)
-app.get('/health', (req, res) => res.status(200).send('OK'));
+app.get('/health', (req, res) => {
+  const angelOneSocket = require('./services/angelOneSocket');
+  res.status(200).json({
+    status: 'OK',
+    wsConnected: angelOneSocket.isConnected ? angelOneSocket.isConnected() : 'unknown',
+    subscriptions: polling.getSubscriptions(),
+    liveKeys: Object.keys(polling.getLiveState ? polling.getLiveState : {}),
+  });
+});
 
 
 // ─────────────────────────────────────────────────────────────────────────────

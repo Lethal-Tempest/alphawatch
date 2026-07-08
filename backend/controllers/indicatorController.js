@@ -22,8 +22,38 @@ exports.getIndicators = async (req, res, next) => {
     // 1. Try to get candles from the in-memory buffer first (instant)
     let candles = candleAggregator.getCandles(key, interval);
 
-    // 2. If not enough data, fetch from AngelOne REST (same logic as marketController)
-    if (candles.length < 30) {
+    // 2. If not enough data OR the buffer is stale, re-fetch via getHistorical
+    //    (getHistorical now contains stale-buffer detection + re-fetch logic)
+    const needsFetch = candles.length < 30;
+    if (!needsFetch && interval !== '1d' && candles.length > 0) {
+      // Check staleness: if latest candle is older than 2 intervals, re-fetch
+      const { getHistorical: _getHistorical } = require('./marketController');
+      const INTERVAL_MS_MAP = {
+        '1m': 60000, '5m': 300000, '10m': 600000,
+        '15m': 900000, '30m': 1800000, '1h': 3600000,
+      };
+      const ms = INTERVAL_MS_MAP[interval];
+      if (ms) {
+        const latestTs = new Date(candles[candles.length - 1].timestamp).getTime();
+        if (Date.now() - latestTs > ms) {
+          // Trigger a re-fetch via getHistorical which will update the buffer
+          const fakeReq = { params: { exchange, symbol, interval }, priority: 'low' };
+          const fakeRes = {
+            statusCode: 200,
+            status(code) { this.statusCode = code; return this; },
+            json(body) {
+              if (body?.candles?.length) candles = body.candles;
+            },
+          };
+          try {
+            await getHistorical(fakeReq, fakeRes, (err) => { if (err) throw err; });
+          } catch (e) {
+            console.warn(`[Indicators] Stale re-fetch failed for ${key}@${interval}:`, e.message);
+          }
+          candles = candleAggregator.getCandles(key, interval);
+        }
+      }
+    } else if (needsFetch) {
       // Piggy-back on the existing historical fetch pipeline via internal call
       // We call the same internal function that marketController.getHistorical uses
       const fakeReq = { params: { exchange, symbol, interval }, priority: 'low' };

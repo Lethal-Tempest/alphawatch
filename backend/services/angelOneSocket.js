@@ -8,6 +8,9 @@ let onTickReceived = null;
 // Map of currently subscribed tokens: token -> { key, exchangeType }
 const subscribedTokens = new Map();
 
+// Track last requested keys to resubscribe when socket reconnects / opens
+let lastTargetKeys = new Set();
+
 exports.init = (io, tickCb) => {
   onTickReceived = tickCb;
 };
@@ -42,6 +45,8 @@ exports.connect = async () => {
     // Drain any pending subscriptions that queued during connection setup
     webSocketClient.on('open', () => {
       wsConnected = true;
+      console.log('🔌 [WebSocket] Smart Stream opened. Syncing pending subscriptions...');
+      exports.syncSubscriptions(lastTargetKeys);
     });
 
     webSocketClient.on('close', () => {
@@ -120,6 +125,7 @@ exports.reconnect = async () => {
 };
 
 exports.syncSubscriptions = (allKeys) => {
+  lastTargetKeys = new Set(allKeys);
   if (!wsConnected || !webSocketClient) return;
 
   const targetTokens = new Map();
@@ -205,3 +211,5 @@ function sendSubscriptionRequest(action, exchangeType, tokens) {
     console.error('❌ [WebSocket] Failed to send subscription request:', err.message);
   }
 }
+
+exports.isConnected = () => wsConnected;

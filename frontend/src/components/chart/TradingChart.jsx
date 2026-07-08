@@ -19,6 +19,11 @@ import { useTheme } from '../../contexts/ThemeContext';
 
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
 
+const INTERVAL_MS_MAP = {
+  '1m': 60000, '5m': 300000, '10m': 600000, '15m': 900000,
+  '30m': 1800000, '1h': 3600000, '1d': 86400000,
+};
+
 // Sub-chart definitions
 const SUB_CHARTS = {
   RSI:             { label: 'RSI (14)',          height: 110 },
@@ -606,12 +611,74 @@ export default function TradingChart({
   }, [candles, activeIndicators, exchange, symbol, interval]);
 
   // ── 6. Real-time candle_update ─────────────────────────────────────────────
+  // Track the last time a live WebSocket candle_update was received.
+  // The HTTP fallback only kicks in when the WS has been silent too long.
+  const lastWsUpdateRef = useRef(Date.now());
+
   useEffect(() => {
     if (!socket) return;
 
-    const handler = ({ key: updKey, interval: updInterval, candle }) => {
+    const handler = ({ key: updKey, interval: updInterval, candle, indicators: updIndicators }) => {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
+
+      if (updInterval === interval) {
+        lastWsUpdateRef.current = Date.now(); // record WS activity
+      }
+
+      if (updInterval === interval && updIndicators) {
+        setIndicatorCache(exchange, symbol, interval, updIndicators);
+        indicatorsRef.current = updIndicators;
+
+        // ── Immediately update all active indicator series via update() ──────
+        const ind = updIndicators;
+        const times = (allCandlesRef.current[interval] || []).map(c => toTvTime(c.timestamp));
+        const lastTime = times[times.length - 1];
+        if (lastTime != null) {
+          const lastIdx = times.length - 1;
+          ['sma20','sma50','sma100','sma200'].forEach(k => {
+            if (series.current[k] && ind[k]?.[lastIdx] != null)
+              series.current[k].update({ time: lastTime, value: ind[k][lastIdx] });
+          });
+          ['ema20','ema50','ema100','ema200'].forEach(k => {
+            if (series.current[k] && ind[k]?.[lastIdx] != null)
+              series.current[k].update({ time: lastTime, value: ind[k][lastIdx] });
+          });
+          if (series.current.bbUpper && ind.bbUpper?.[lastIdx] != null) {
+            series.current.bbUpper.update({ time: lastTime, value: ind.bbUpper[lastIdx] });
+            series.current.bbMiddle?.update({ time: lastTime, value: ind.bbMiddle[lastIdx] });
+            series.current.bbLower?.update({ time: lastTime, value: ind.bbLower[lastIdx] });
+          }
+          if (series.current.rsiLine && ind.rsi14?.[lastIdx] != null)
+            series.current.rsiLine.update({ time: lastTime, value: ind.rsi14[lastIdx] });
+          if (series.current.macdLine && ind.macdLine?.[lastIdx] != null) {
+            series.current.macdLine.update({ time: lastTime, value: ind.macdLine[lastIdx] });
+            series.current.macdSignal?.update({ time: lastTime, value: ind.macdSignal[lastIdx] });
+            const histVal = ind.macdHist?.[lastIdx];
+            if (histVal != null) series.current.macdHist?.update({ time: lastTime, value: histVal, color: histVal >= 0 ? '#22c55e66' : '#ef444466' });
+          }
+          if (series.current.adxLine && ind.adx?.[lastIdx] != null) {
+            series.current.adxLine.update({ time: lastTime, value: ind.adx[lastIdx] });
+            series.current.adxPlus?.update({ time: lastTime, value: ind.plusDI[lastIdx] });
+            series.current.adxMinus?.update({ time: lastTime, value: ind.minusDI[lastIdx] });
+          }
+          if (series.current.mfiLine && ind.mfi14?.[lastIdx] != null)
+            series.current.mfiLine.update({ time: lastTime, value: ind.mfi14[lastIdx] });
+          if (series.current.smiLine && ind.smiLine?.[lastIdx] != null) {
+            series.current.smiLine.update({ time: lastTime, value: ind.smiLine[lastIdx] });
+            series.current.smiSignal?.update({ time: lastTime, value: ind.smiSignal[lastIdx] });
+          }
+          if (series.current.deltaSmiLine && ind.deltaSMI?.[lastIdx] != null)
+            series.current.deltaSmiLine.update({ time: lastTime, value: ind.deltaSMI[lastIdx] });
+          if (series.current.deltaSmiSignalLine && ind.deltaSMISignal?.[lastIdx] != null)
+            series.current.deltaSmiSignalLine.update({ time: lastTime, value: ind.deltaSMISignal[lastIdx] });
+          if (series.current.smiDistLine && ind.smiDist?.[lastIdx] != null)
+            series.current.smiDistLine.update({ time: lastTime, value: ind.smiDist[lastIdx] });
+          if (series.current.deltaSmiDistLine && ind.deltaSMIDist?.[lastIdx] != null)
+            series.current.deltaSmiDistLine.update({ time: lastTime, value: ind.deltaSMIDist[lastIdx] });
+          updateLegends(lastIdx);
+        }
+      }
 
       setCandles(prev => {
         if (updInterval !== interval) return prev;
@@ -633,6 +700,72 @@ export default function TradingChart({
       series.current.volume?.update({ time: tv.time, value: +candle.volume, color: candle.close >= candle.open ? '#22c55e22' : '#ef444422' });
     };
 
+    const tickHandler = (tick) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      const tickKey = `${tick.exchange.toUpperCase()}:${tick.symbol.toUpperCase()}`;
+      if (tickKey !== targetKey) return;
+      if (!tick.volume || tick.volume <= 0) return;
+
+      lastWsUpdateRef.current = Date.now(); // Record WebSocket activity
+
+      const intervalMs = INTERVAL_MS_MAP[interval] || 300000;
+      const intervalMin = intervalMs / (60 * 1000);
+      const offsetMs = (225 % intervalMin) * 60 * 1000;
+      const shiftedTs = tick.ts - offsetMs;
+      const snappedShifted = Math.floor(shiftedTs / intervalMs) * intervalMs;
+      const snappedIso = new Date(snappedShifted + offsetMs).toISOString();
+
+      setCandles(prev => {
+        const updated = [...prev];
+        if (updated.length === 0) return prev;
+
+        const last = { ...updated[updated.length - 1] };
+        if (last.timestamp === snappedIso) {
+          last.high = Math.max(last.high, tick.ltp);
+          last.low = Math.min(last.low, tick.ltp);
+          last.close = tick.ltp;
+          const prevVol = last._prevVolume || last.volume;
+          const delta = Math.max(0, tick.volume - prevVol);
+          last.volume = (+last.volume || 0) + delta;
+          last._prevVolume = tick.volume;
+          updated[updated.length - 1] = last;
+        } else {
+          if (last._prevVolume) delete last._prevVolume;
+          const newCandle = {
+            timestamp: snappedIso,
+            open: tick.ltp,
+            high: tick.ltp,
+            low: tick.ltp,
+            close: tick.ltp,
+            volume: 0,
+            _prevVolume: tick.volume
+          };
+          updated.push(newCandle);
+        }
+        allCandlesRef.current[interval] = updated;
+
+        // Immediately update lightweight-charts main series
+        const activeLast = updated[updated.length - 1];
+        const tv = {
+          time: toTvTime(activeLast.timestamp),
+          open: +activeLast.open,
+          high: +activeLast.high,
+          low: +activeLast.low,
+          close: +activeLast.close
+        };
+        series.current.candle?.update(tv);
+        series.current.volume?.update({
+          time: tv.time,
+          value: +activeLast.volume,
+          color: activeLast.close >= activeLast.open ? '#22c55e22' : '#ef444422'
+        });
+
+        updateLegends(updated.length - 1);
+        onCandlesChange?.(interval, updated);
+        return updated;
+      });
+    };
+
     const allHandler = ({ key: updKey, interval: updInterval, candle }) => {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
@@ -641,12 +774,55 @@ export default function TradingChart({
     };
 
     socket.on('candle_update', handler);
+    socket.on('tick', tickHandler);
     socket.on('candle_update', allHandler);
     return () => {
       socket.off('candle_update', handler);
+      socket.off('tick', tickHandler);
       socket.off('candle_update', allHandler);
     };
   }, [socket, interval, exchange, symbol, onCandlesChange]);
+
+  useEffect(() => {
+    const silenceThreshold = 60000; // 1 minute threshold of silence from WebSocket ticks
+
+    const check = async () => {
+      const msSinceLastWs = Date.now() - lastWsUpdateRef.current;
+      if (msSinceLastWs < silenceThreshold) return; // WebSocket is healthy — skip
+
+      // WebSocket silent too long: fetch fresh data from backend buffer
+      try {
+        const { data } = await api.get(`/historical/${exchange}/${symbol}/${interval}`);
+        if (!data.candles?.length) return;
+        const sorted = [...data.candles]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+          .filter(c => (+c.volume || 0) > 0);
+        if (!sorted.length) return;
+
+        const prev = allCandlesRef.current[interval] || [];
+        const lastPrev = prev[prev.length - 1];
+        const lastNew  = sorted[sorted.length - 1];
+        const changed  = !lastPrev ||
+          lastPrev.timestamp !== lastNew.timestamp ||
+          Math.round(+lastPrev.close * 100) !== Math.round(+lastNew.close * 100) ||
+          lastPrev.volume !== lastNew.volume;
+        if (!changed) return;
+
+        allCandlesRef.current[interval] = sorted;
+        setCandles(sorted);
+        onCandlesChange?.(interval, sorted);
+
+        const tv  = sorted.map(c => ({ time: toTvTime(c.timestamp), open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+        const vol = sorted.map(c => ({ time: toTvTime(c.timestamp), value: +c.volume, color: c.close >= c.open ? '#22c55e22' : '#ef444422' }));
+        series.current.candle?.setData(tv);
+        series.current.volume?.setData(vol);
+        invalidateIndicatorCache(exchange, symbol, interval);
+      } catch { /* silently ignore */ }
+    };
+
+    const timerId = setInterval(check, 15000); // check every 15s (not every 5s)
+    return () => clearInterval(timerId);
+  }, [symbol, exchange, interval, onCandlesChange]);
 
   // ── 7. Synchronize crosshair & timescales + display legend ──────────────────
   useEffect(() => {

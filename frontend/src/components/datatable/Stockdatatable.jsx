@@ -20,6 +20,11 @@ import api, { fetchIndicators, invalidateIndicatorCache, setIndicatorCache } fro
 const TABLE_ROWS = 1000;
 const TIMEFRAMES = ['1m', '5m', '10m', '15m', '30m', '1h', '1d'];
 
+const INTERVAL_MS_MAP = {
+  '1m': 60000, '5m': 300000, '10m': 600000, '15m': 900000,
+  '30m': 1800000, '1h': 3600000, '1d': 86400000,
+};
+
 // ── Format helpers ────────────────────────────────────────────────────────────
 const p  = (n, d = 2)  => (n != null && !isNaN(n)) ? Number(n).toFixed(d) : '—';
 const pd = (n, d = 3)  => (n != null && !isNaN(n)) ? (n >= 0 ? '+' : '') + Number(n).toFixed(d) : '—';
@@ -355,6 +360,8 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
   };
 
   // ── Live candle updates via socket ─────────────────────────────────────────
+  const lastWsUpdateRef = useRef(Date.now());
+
   useEffect(() => {
     if (!socket) return;
 
@@ -362,6 +369,8 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
       const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
       if (updKey !== targetKey) return;
       if (updInterval !== interval) return;
+
+      lastWsUpdateRef.current = Date.now(); // Track WebSocket activity
 
       // Skip zero-volume candles — same rule as the backend aggregator
       if (!candle.volume || candle.volume <= 0) return;
@@ -381,6 +390,54 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
         } else {
           // New candle opened — append it
           updated.push({ ...candle });
+          if (updated.length > TABLE_ROWS) updated.shift();
+        }
+        allCandlesRef.current[interval] = updated;
+        return updated;
+      });
+    };
+
+    const tickHandler = (tick) => {
+      const targetKey = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
+      const tickKey = `${tick.exchange.toUpperCase()}:${tick.symbol.toUpperCase()}`;
+      if (tickKey !== targetKey) return;
+      if (!tick.volume || tick.volume <= 0) return;
+
+      lastWsUpdateRef.current = Date.now(); // Track WebSocket activity
+
+      const intervalMs = INTERVAL_MS_MAP[interval] || 300000;
+      const intervalMin = intervalMs / (60 * 1000);
+      const offsetMs = (225 % intervalMin) * 60 * 1000;
+      const shiftedTs = tick.ts - offsetMs;
+      const snappedShifted = Math.floor(shiftedTs / intervalMs) * intervalMs;
+      const snappedIso = new Date(snappedShifted + offsetMs).toISOString();
+
+      setCandles(prev => {
+        const updated = [...prev];
+        if (updated.length === 0) return prev;
+
+        const last = { ...updated[updated.length - 1] };
+        if (last.timestamp === snappedIso) {
+          last.high = Math.max(last.high, tick.ltp);
+          last.low = Math.min(last.low, tick.ltp);
+          last.close = tick.ltp;
+          const prevVol = last._prevVolume || last.volume;
+          const delta = Math.max(0, tick.volume - prevVol);
+          last.volume = (+last.volume || 0) + delta;
+          last._prevVolume = tick.volume;
+          updated[updated.length - 1] = last;
+        } else {
+          if (last._prevVolume) delete last._prevVolume;
+          const newCandle = {
+            timestamp: snappedIso,
+            open: tick.ltp,
+            high: tick.ltp,
+            low: tick.ltp,
+            close: tick.ltp,
+            volume: 0,
+            _prevVolume: tick.volume
+          };
+          updated.push(newCandle);
           if (updated.length > TABLE_ROWS) updated.shift();
         }
         allCandlesRef.current[interval] = updated;
@@ -424,15 +481,68 @@ export default function StockDataTable({ symbol, exchange, socket, onClose }) {
     };
 
     socket.on('candle_update', handler);
+    socket.on('tick', tickHandler);
     socket.on('candle_history', candleHistoryHandler);
     socket.on('indicator_history', indicatorHistoryHandler);
 
     return () => {
       socket.off('candle_update', handler);
+      socket.off('tick', tickHandler);
       socket.off('candle_history', candleHistoryHandler);
       socket.off('indicator_history', indicatorHistoryHandler);
     };
   }, [socket, exchange, symbol, interval]);
+
+  useEffect(() => {
+    if (!symbol || !exchange) return;
+    const silenceThreshold = 60000; // 1 minute threshold of silence from WebSocket ticks
+
+    const check = async () => {
+      const msSinceLastWs = Date.now() - lastWsUpdateRef.current;
+      if (msSinceLastWs < silenceThreshold) return; // WebSocket is active and healthy — skip HTTP check
+
+      try {
+        // Invalidate frontend indicator cache before fetching to ensure fresh data
+        invalidateIndicatorCache(exchange, symbol, interval);
+
+        const [candleRes, indData] = await Promise.all([
+          api.get(`/historical/${exchange}/${symbol}/${interval}`),
+          fetchIndicators(exchange, symbol, interval).catch(() => null),
+        ]);
+
+        if (!candleRes.data?.candles?.length) return;
+
+        const sorted = [...candleRes.data.candles]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+          .filter(c => (+c.volume || 0) > 0)
+          .slice(-TABLE_ROWS);
+        if (!sorted.length) return;
+
+        // Only update state when there's an actual change in the latest candle
+        const prev     = allCandlesRef.current[interval] || [];
+        const lastPrev = prev[prev.length - 1];
+        const lastNew  = sorted[sorted.length - 1];
+        const changed  = !lastPrev ||
+          lastPrev.timestamp !== lastNew.timestamp ||
+          Math.round(+lastPrev.close * 100) !== Math.round(+lastNew.close * 100) ||
+          lastPrev.volume !== lastNew.volume;
+
+        if (changed) {
+          allCandlesRef.current[interval] = sorted;
+          setCandles(sorted);
+        }
+
+        if (indData) {
+          setIndicatorCache(exchange, symbol, interval, indData);
+          allIndicatorsRef.current[interval] = indData;
+          setIndicators(indData);
+        }
+      } catch { /* silently ignore */ }
+    };
+
+    const timerId = setInterval(check, 15000); // check every 15s
+    return () => clearInterval(timerId);
+  }, [symbol, exchange, interval]);
 
   // ── getVal: map column key → indicator value at candle index i ─────────────
   // `i` is the index into the `candles` array (oldest→newest).

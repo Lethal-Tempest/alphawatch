@@ -52,14 +52,54 @@ exports.getQuote = async (req, res, next) => {
 };
 
 // ── Historical Candles ────────────────────────────────────────────────────────
+
+// Helper: compute the start of the current interval bucket (aligned to market open 09:15 IST)
+function currentCandleStart(intervalMs) {
+  const now = Date.now();
+  const intervalMin = intervalMs / (60 * 1000);
+  const offsetMs    = (225 % intervalMin) * 60 * 1000; // 225 = minutes from UTC midnight to 09:15 IST
+  const shifted     = now - offsetMs;
+  return Math.floor(shifted / intervalMs) * intervalMs + offsetMs;
+}
+
+const INTERVAL_MS = {
+  '1m':  60 * 1000, '5m': 5 * 60 * 1000, '10m': 10 * 60 * 1000,
+  '15m': 15 * 60 * 1000, '30m': 30 * 60 * 1000, '1h': 60 * 60 * 1000,
+  '1d':  24 * 60 * 60 * 1000,
+};
+
 exports.getHistorical = async (req, res, next) => {
   try {
     const { exchange, symbol, interval } = req.params;
     const key = `${exchange.toUpperCase()}:${symbol.toUpperCase()}`;
 
-    // FIX: Only return memory buffer IF the initial 250-candle baseline was fetched
     if (candleAggregator.hasHistory(key, interval)) {
       const cached = candleAggregator.getCandles(key, interval);
+
+      // ── Stale-buffer check ─────────────────────────────────────────────────
+      // If the latest cached candle is OLDER than the current interval bucket,
+      // the WebSocket feed hasn't been updating the buffer. Force a re-fetch so
+      // the LIVE row always shows current market data.
+      const ms        = INTERVAL_MS[interval];
+      const isIntraday = interval !== '1d';
+      if (ms && isIntraday && cached.length > 0) {
+        const latestTs  = new Date(cached[cached.length - 1].timestamp).getTime();
+        const bucketStart = currentCandleStart(ms);
+        const isStale   = latestTs < bucketStart;
+        if (isStale) {
+          console.log(`📡 [Historical] Buffer stale for ${key}@${interval} — re-fetching from AngelOne`);
+          // Re-fetch and merge without blocking the request more than necessary
+          try {
+            const freshCandles = await angelOne.fetchHistoricalCandles(exchange, symbol, interval, req.priority || 'high');
+            candleAggregator.setHistoricalCandles(key, interval, freshCandles);
+          } catch (fetchErr) {
+            console.warn(`⚠️  [Historical] Re-fetch failed for ${key}@${interval}:`, fetchErr.message);
+          }
+          const refreshed = candleAggregator.getCandles(key, interval);
+          return res.json({ success: true, source: 'refreshed', candles: refreshed });
+        }
+      }
+
       return res.json({ success: true, source: 'buffer', candles: cached });
     }
 
